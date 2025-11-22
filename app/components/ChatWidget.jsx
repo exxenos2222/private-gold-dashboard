@@ -25,7 +25,8 @@ export default function ChatWidget() {
         setLoading(true);
 
         try {
-            const res = await fetch('http://127.0.0.1:8000/chat', {
+            // --- [แก้ไข] ยิงไปหา Render Server ---
+            const res = await fetch('https://private-gold-dashboard.onrender.com/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: userMsg })
@@ -33,7 +34,7 @@ export default function ChatWidget() {
             const data = await res.json();
             setMessages(prev => [...prev, { role: 'bot', text: data.reply }]);
         } catch (err) {
-            setMessages(prev => [...prev, { role: 'bot', text: '❌ ขอโทษครับ ติดต่อ Server ไม่ได้ (อย่าลืมรัน Python นะ!)' }]);
+            setMessages(prev => [...prev, { role: 'bot', text: '❌ ขอโทษครับ ติดต่อ Server ไม่ได้ (Server อาจจะหลับอยู่ รอสักครู่)' }]);
         } finally {
             setLoading(false);
         }

@@ -4,7 +4,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { FaChartLine, FaRegNewspaper, FaSyncAlt, FaTimes, FaArrowUp, FaArrowDown, FaExclamationTriangle, FaRobot } from 'react-icons/fa';
 import { MdOutlineDateRange, MdAccessTime } from 'react-icons/md';
-import ChatWidget from '../components/ChatWidget'; // อย่าลืมเช็ค Path ให้ถูกนะครับ
+import ChatWidget from '../components/ChatWidget'; 
 
 const ChartButton = ({ symbol, currentSymbol, onClick, label }) => (
     <button
@@ -70,8 +70,6 @@ export default function MarketPage() {
     // =========================================================================
 
     const generateMockData = useCallback(() => {
-        // --- [แก้ไข 1] ลบการสุ่มราคา Main Ticker (XAUUSD) ออกไปแล้ว ---
-        // เหลือไว้แค่ Watchlist ตัวอื่นๆ (สมมติว่าตัวอื่นยังไม่ได้ทำ backend)
         const mockWatchlist = [
             { symbol: 'BINANCE:BTCUSDT', price: (Math.random() * (70000 - 60000) + 60000).toFixed(0), change: (Math.random() * 1000 - 500).toFixed(0), signal: Math.random() > 0.7 ? 'Sell' : Math.random() < 0.3 ? 'Buy' : 'Hold' },
             { symbol: 'OANDA:EURUSD', price: (Math.random() * (1.09 - 1.05) + 1.05).toFixed(4), change: (Math.random() * 0.01 - 0.005).toFixed(4), signal: Math.random() > 0.6 ? 'Buy' : 'Hold' },
@@ -222,17 +220,17 @@ export default function MarketPage() {
         return () => clearInterval(intervalId);
     }, [generateMockData]);
 
-    // 2. AI & Real Gold Price Update
+    // 2. AI & Real Gold Price Update (FIXED URL)
     useEffect(() => {
         const fetchAI = async () => {
             try {
-                const res = await fetch('http://127.0.0.1:8000/analyze/GC=F');
+                // --- [แก้ไข] ยิงไปหา Render Server ---
+                const res = await fetch('https://private-gold-dashboard.onrender.com/analyze/GC=F');
                 if (!res.ok) { throw new Error('Connect failed'); }
                 const data = await res.json();
                 
                 setAiData(data);
 
-                // --- [แก้ไข 2] เอาข้อมูลจริงใส่ Ticker ด้านบน ---
                 setMainTicker({
                     price: data.price,
                     change: data.change, 
@@ -244,7 +242,7 @@ export default function MarketPage() {
         };
 
         fetchAI();
-        const aiInterval = setInterval(fetchAI, 60000); // อัปเดตทุก 1 นาที
+        const aiInterval = setInterval(fetchAI, 60000); 
 
         return () => clearInterval(aiInterval);
     }, []);
