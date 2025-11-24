@@ -19,99 +19,108 @@ class AnalysisRequest(BaseModel):
     symbol: str
     mode: str 
 
-# --- ฟังก์ชันดึงข้อมูลทองคำแบบ "Spot First" (เอา Spot ขึ้นก่อน) ---
-def get_gold_data_smart(interval, period):
-    # 1. ลองดึง Spot Gold (XAUUSD=X) ก่อน <-- พระเอกของเรา
-    print(f"🔄 Trying Gold Spot (XAUUSD=X) {interval}...")
-    df = yf.Ticker("XAUUSD=X").history(period=period, interval=interval)
-    
-    if len(df) > 25:
-        return df, f"{interval} (Spot)"
-    
-    # 2. ถ้า Spot พัง ค่อยไปลอง Futures (GC=F)
-    print(f"⚠️ Spot failed, switching to Futures (GC=F)...")
-    df = yf.Ticker("GC=F").history(period=period, interval=interval)
-    
-    if len(df) > 25:
-        return df, f"{interval} (Futures)"
+# --- ฟังก์ชันดึงข้อมูล (Safe Mode) ---
+def get_data_safe(symbol, interval, period):
+    # 1. ลองดึง Spot Gold ก่อน (ถ้าเป็นทอง)
+    if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
+        try:
+            df = yf.Ticker("XAUUSD=X").history(period=period, interval=interval)
+            if len(df) > 15: return df, f"{interval} (Spot)"
+        except: pass
         
-    # 3. ถ้าพังหมด ใช้ H1 Spot มาแทน
-    print(f"❌ All M15 failed, fallback to H1...")
-    df = yf.Ticker("XAUUSD=X").history(period="1mo", interval="60m")
-    return df, "H1 (Emergency)"
+        # สำรอง: Futures
+        try:
+            df = yf.Ticker("GC=F").history(period=period, interval=interval)
+            if len(df) > 15: return df, f"{interval} (Futures)"
+        except: pass
+
+    # 2. กรณี Bitcoin หรือคู่อื่น
+    else:
+        try:
+            df = yf.Ticker(symbol).history(period=period, interval=interval)
+            if len(df) > 15: return df, interval
+        except: pass
+
+    # 3. ไม้ตายสุดท้าย: ดึง H1 มาใช้แทน (กันตาย)
+    print("⚠️ Fetch failed, using fallback H1...")
+    try:
+        # ใช้ Spot Gold ถ้าเป็นทอง
+        fallback_sym = "XAUUSD=X" if "GC=F" in symbol or "GOLD" in symbol else symbol
+        df = yf.Ticker(fallback_sym).history(period="1mo", interval="60m")
+        return df, "H1 (Backup Data)"
+    except:
+        return pd.DataFrame(), "Error"
 
 def analyze_dynamic(symbol: str, mode: str):
     try:
-        # 1. Config
+        # Config
         if mode == "scalping":
-            req_int = "15m"; req_per = "5d"
-            sl_mult = 0.6; tp_mult = 1.2
-            tf_name = "M15 (Scalping)"
+            req_int = "15m"; req_per = "5d"; sl_mult = 0.6; tp_mult = 1.2; tf_name = "M15 (ซิ่ง)"
         elif mode == "daytrade":
-            req_int = "60m"; req_per = "1mo"
-            sl_mult = 1.5; tp_mult = 2.0
-            tf_name = "H1 (Day Trade)"
+            req_int = "60m"; req_per = "1mo"; sl_mult = 1.5; tp_mult = 2.0; tf_name = "H1 (จบในวัน)"
         else: 
-            req_int = "1d"; req_per = "1y"
-            sl_mult = 2.5; tp_mult = 3.5
-            tf_name = "D1 (Swing)"
+            req_int = "1d"; req_per = "1y"; sl_mult = 2.5; tp_mult = 3.5; tf_name = "D1 (ถือยาว)"
 
-        # 2. Get Data
-        if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
-            df, actual_tf_label = get_gold_data_smart(req_int, req_per)
-        else:
-            # Bitcoin
-            df = yf.Ticker(symbol).history(period=req_per, interval=req_int)
-            actual_tf_label = req_int
-            if len(df) < 25: 
-                df = yf.Ticker(symbol).history(period="1mo", interval="60m")
-                actual_tf_label = "H1 (Backup)"
+        # Get Data
+        df, actual_tf_label = get_data_safe(symbol, req_int, req_per)
+        
+        if df.empty or len(df) < 10: return None 
 
-        if df.empty: return None
-
-        # 3. Indicators
-        try:
-            df.ta.atr(length=14, append=True)
-            df.ta.rsi(length=14, append=True)
-            df.ta.ema(length=50, append=True)
-            df.ta.bbands(length=20, std=2, append=True)
-            df.ta.macd(append=True)
-        except: pass
-
+        # --- Calculation Block (กัน Error) ---
         last = df.iloc[-1]
         price = last['Close']
         
-        atr = last['ATRr_14'] if 'ATRr_14' in last and pd.notna(last['ATRr_14']) else (price * 0.005)
-        rsi = last['RSI_14'] if 'RSI_14' in last and pd.notna(last['RSI_14']) else 50
-        ema50 = last['EMA_50'] if 'EMA_50' in last and pd.notna(last['EMA_50']) else price
+        # Default Indicators
+        atr = price * 0.005
+        rsi = 50
+        ema50 = price
+        
+        # พยายามคำนวณ Indicator ทีละตัว (ตัวไหนพังให้ข้าม)
+        try: 
+            df.ta.atr(length=14, append=True)
+            if pd.notna(df['ATRr_14'].iloc[-1]): atr = df['ATRr_14'].iloc[-1]
+        except: pass
 
-        # 4. Scoring
+        try:
+            df.ta.rsi(length=14, append=True)
+            if pd.notna(df['RSI_14'].iloc[-1]): rsi = df['RSI_14'].iloc[-1]
+        except: pass
+
+        try:
+            df.ta.ema(length=50, append=True)
+            if pd.notna(df['EMA_50'].iloc[-1]): ema50 = df['EMA_50'].iloc[-1]
+        except: pass
+
+        # Scoring
         bull_score = 0
         bear_score = 0
         reasons = []
 
-        # Trend
-        if price > ema50: bull_score += 2; reasons.append("ราคา > EMA50")
-        else: bear_score += 2; reasons.append("ราคา < EMA50")
+        if price > ema50: bull_score += 2; reasons.append("เหนือ EMA50")
+        else: bear_score += 2; reasons.append("ใต้ EMA50")
 
-        # BB Entry
-        if 'BBL_20_2.0' in last and pd.notna(last['BBL_20_2.0']):
-            bb_lower = last['BBL_20_2.0']
-            bb_upper = last['BBU_20_2.0']
-            if price <= bb_lower * 1.001: bull_score += 3; reasons.append("ชนขอบล่าง BB")
-            if price >= bb_upper * 0.999: bear_score += 3; reasons.append("ชนขอบบน BB")
-            
-            buy_entry = bb_lower
-            sell_entry = bb_upper
-        else:
-            buy_entry = price - (atr * 0.5)
-            sell_entry = price + (atr * 0.5)
+        if rsi < 30: bull_score += 2; reasons.append("RSI Oversold")
+        elif rsi > 70: bear_score += 2; reasons.append("RSI Overbought")
 
-        # RSI
-        if rsi < 30: bull_score += 1; reasons.append("RSI Oversold")
-        if rsi > 70: bear_score += 1; reasons.append("RSI Overbought")
+        # พยายามใช้ Bollinger Bands
+        buy_entry = price - atr
+        sell_entry = price + atr
+        
+        try:
+            df.ta.bbands(length=20, std=2, append=True)
+            if 'BBL_20_2.0' in df.columns:
+                bb_lower = df['BBL_20_2.0'].iloc[-1]
+                bb_upper = df['BBU_20_2.0'].iloc[-1]
+                
+                if pd.notna(bb_lower) and pd.notna(bb_upper):
+                    buy_entry = bb_lower
+                    sell_entry = bb_upper
+                    
+                    if price <= bb_lower: bull_score += 3; reasons.append("ชนขอบล่าง BB")
+                    if price >= bb_upper: bear_score += 3; reasons.append("ชนขอบบน BB")
+        except: pass
 
-        # 5. Verdict
+        # Verdict
         if bull_score > bear_score:
             bias = "BULLISH"
             action_rec = "🟢 เน้นฝั่ง BUY"
@@ -122,11 +131,11 @@ def analyze_dynamic(symbol: str, mode: str):
             bias = "SIDEWAY"
             action_rec = "⚠️ รอเลือกทาง"
 
-        # Dynamic Entry Adjust
-        if (price - buy_entry) > (atr * 3): buy_entry = price - (atr * 1.0)
-        if (sell_entry - price) > (atr * 3): sell_entry = price + (atr * 1.0)
+        # Safety Check: Entry
+        if (price - buy_entry) > (atr * 5): buy_entry = price - atr
+        if (sell_entry - price) > (atr * 5): sell_entry = price + atr
 
-        # SL/TP Calculation
+        # Setup
         buy_sl = buy_entry - (atr * sl_mult)
         buy_tp = buy_entry + (atr * tp_mult)
         sell_sl = sell_entry + (atr * sl_mult)
@@ -136,34 +145,26 @@ def analyze_dynamic(symbol: str, mode: str):
         if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol: pips_scale = 100 
         if "BTC" in symbol: pips_scale = 1
 
-        buy_pips = int((buy_entry - buy_sl) * pips_scale)
-        sell_pips = int((sell_sl - sell_entry) * pips_scale)
-
-        display_tf = tf_name
-        if "Futures" in actual_tf_label: display_tf += " [Futures]"
-        elif "Backup" in actual_tf_label or "Emergency" in actual_tf_label: display_tf = "H1 (Backup Data)"
-
         return {
             "symbol": symbol,
             "price": round(price, 2),
-            "tf_name": display_tf,
+            "tf_name": actual_tf_label,
             "trend": bias,
             "action": action_rec,
-            "reasons": ", ".join(reasons),
+            "reasons": ", ".join(reasons[:3]),
             "rsi": round(rsi, 2),
             "score": f"{bull_score}-{bear_score}",
-            "buy_setup": {"entry": round(buy_entry, 2), "sl": round(buy_sl, 2), "tp": round(buy_tp, 2), "pips": buy_pips},
-            "sell_setup": {"entry": round(sell_entry, 2), "sl": round(sell_sl, 2), "tp": round(sell_tp, 2), "pips": sell_pips}
+            "buy_setup": {"entry": round(buy_entry, 2), "sl": round(buy_sl, 2), "tp": round(buy_tp, 2), "pips": int((buy_entry - buy_sl) * pips_scale)},
+            "sell_setup": {"entry": round(sell_entry, 2), "sl": round(sell_sl, 2), "tp": round(sell_tp, 2), "pips": int((sell_sl - sell_entry) * pips_scale)}
         }
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"CRITICAL ERROR: {e}")
         return None
 
 @app.post("/analyze_custom")
 def analyze_custom(req: AnalysisRequest):
-    target = req.symbol # รับ GOLD หรือ BITCOIN มาตรงๆ เลย แล้วไปจัดการใน analyze_dynamic
-    
+    target = req.symbol
     data = analyze_dynamic(target, req.mode)
     
     if data:
@@ -171,7 +172,7 @@ def analyze_custom(req: AnalysisRequest):
             f"🏆 **สรุป: {data['action']}**\n"
             f"--------------------\n"
             f"🎯 **แผนเทรด {data['symbol']}**\n"
-            f"⚙️ โหมด: {data['tf_name']}\n"
+            f"⚙️ ข้อมูล: {data['tf_name']}\n"
             f"📊 สถานะ: {data['trend']} (RSI: {data['rsi']})\n"
             f"--------------------\n"
             f"🟢 **BUY Limit**\n"
@@ -186,13 +187,13 @@ def analyze_custom(req: AnalysisRequest):
         )
         return {"reply": reply}
     else:
-        return {"reply": "❌ ระบบ Data ขัดข้อง กรุณาลองใหม่อีกครั้ง"}
+        return {"reply": "❌ ขออภัยครับ ระบบไม่สามารถดึงข้อมูลได้จริงๆ (กรุณาลองกดใหม่)"}
 
 @app.get("/analyze/{symbol}")
 def analyze_market(symbol: str):
-    # Dashboard ใช้ Spot Gold เสมอ
-    target = "XAUUSD=X" if "GC=F" in symbol or "GOLD" in symbol else symbol
     try:
+        # ใช้ Spot Gold เสมอเพื่อความชัวร์
+        target = "XAUUSD=X" if "GC=F" in symbol or "GOLD" in symbol else symbol
         ticker = yf.Ticker(target)
         data = ticker.history(period="2d", interval="1h")
         if data.empty: return {"symbol": symbol, "price": 0, "change":0, "percent":0}
