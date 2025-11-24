@@ -25,7 +25,6 @@ export default function ChatWidget() {
         setLoading(true);
 
         try {
-            // --- [แก้ไข] ยิงไปหา Render Server ---
             const res = await fetch('https://private-gold-dashboard.onrender.com/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

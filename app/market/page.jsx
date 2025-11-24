@@ -1,4 +1,3 @@
-// app/market/page.jsx
 
 'use client'
 import { useEffect, useState, useCallback } from 'react'
@@ -54,7 +53,6 @@ export default function MarketPage() {
     const [filter, setFilter] = useState('all')
     const [currentSymbol, setCurrentSymbol] = useState("OANDA:XAUUSD")
 
-    // ตั้งค่าเริ่มต้นให้เป็น 0 ก่อน รอรับค่าจริง
     const [mainTicker, setMainTicker] = useState({ price: 'Loading...', change: 0, percent: 0 });
     
     const [watchlist, setWatchlist] = useState([]);
@@ -65,9 +63,6 @@ export default function MarketPage() {
     const ALL_ORIGINS_GET = 'https://api.allorigins.win/get?url='
     const todayStr = new Date().toISOString().slice(0, 10); 
 
-    // =========================================================================
-    // 1. Logic Functions
-    // =========================================================================
 
     const generateMockData = useCallback(() => {
         const mockWatchlist = [
@@ -210,21 +205,14 @@ export default function MarketPage() {
         setCurrentSymbol(symbol)
     }
     
-    // =========================================================================
-    // 2. useEffect Hooks
-    // =========================================================================
-
-    // 1. Ticker Update (Mock Data for others)
     useEffect(() => {
         const intervalId = setInterval(generateMockData, 5000); 
         return () => clearInterval(intervalId);
     }, [generateMockData]);
 
-    // 2. AI & Real Gold Price Update (FIXED URL)
     useEffect(() => {
         const fetchAI = async () => {
             try {
-                // --- [แก้ไข] ยิงไปหา Render Server ---
                 const res = await fetch('https://private-gold-dashboard.onrender.com/analyze/GC=F');
                 if (!res.ok) { throw new Error('Connect failed'); }
                 const data = await res.json();
@@ -247,7 +235,6 @@ export default function MarketPage() {
         return () => clearInterval(aiInterval);
     }, []);
 
-    // 3. TradingView Script Load
     useEffect(() => {
         const script = document.createElement('script')
         script.src = 'https://s3.tradingview.com/tv.js'
@@ -265,7 +252,6 @@ export default function MarketPage() {
         };
     }, [loadChart, currentSymbol]) 
     
-    // 4. News Countdown Timer
     useEffect(() => {
         const timerId = setInterval(() => {
             if (countdown.minutes > 0) {
@@ -279,12 +265,10 @@ export default function MarketPage() {
         return () => clearInterval(timerId);
     }, [countdown.minutes, fetchNews]); 
 
-    // 5. Initial News Fetch
     useEffect(() => {
         fetchNews();
     }, [fetchNews]); 
 
-    // Helper component สำหรับ Ticker Bar
     const TickerBar = () => {
         const isPositive = mainTicker.change > 0;
         const colorClass = isPositive ? 'text-green-400' : mainTicker.change < 0 ? 'text-red-400' : 'text-gray-400';
@@ -358,7 +342,6 @@ export default function MarketPage() {
                     </div>
                 )}
 
-                {/* Mock Watchlist Items */}
                 {watchlist.map(item => {
                     const isPositive = item.change > 0;
                     const colorClass = isPositive ? 'text-green-400' : item.change < 0 ? 'text-red-400' : 'text-gray-400';
