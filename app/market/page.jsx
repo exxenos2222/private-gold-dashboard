@@ -4,7 +4,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { FaChartLine, FaRegNewspaper, FaSyncAlt, FaTimes, FaArrowUp, FaArrowDown, FaExclamationTriangle } from 'react-icons/fa';
 import { MdOutlineDateRange, MdAccessTime } from 'react-icons/md';
-import ChatPanel from '../components/ChatPanel'; // เรียกใช้ ChatPanel ตัวใหม่
+import ChatPanel from '../components/ChatPanel'; 
 
 const ChartButton = ({ symbol, currentSymbol, onClick, label }) => (
     <button
@@ -97,6 +97,7 @@ export default function MarketPage() {
         setLoading(true); setError(''); setNews([]);
         try {
             const res = await fetch(ALL_ORIGINS_GET + encodeURIComponent(FF_JSON))
+            if (!res.ok) throw new Error('Network response was not ok');
             const wrapper = await res.json()
             const events = JSON.parse(wrapper.contents)
             const normalized = events.map(ev => ({ ...ev, __normDate: normalizeEventDateToYYYYMMDD(ev.date) }))
@@ -105,7 +106,8 @@ export default function MarketPage() {
             if (currentFilter !== "all") todayEvents = todayEvents.filter(ev => (ev.impact || "").toLowerCase() === currentFilter.toLowerCase())
             setNews(todayEvents.sort((a, b) => (a.time < b.time ? -1 : 1)))
         } catch (err) {
-            console.error("Fetch News Error:", err); setError("ไม่สามารถดึงรายการข่าวได้");
+            console.error("Fetch News Error:", err); 
+            // ไม่ต้อง Set Error ให้หน้าเว็บพัง แค่ Log บอก
         } finally { setLoading(false) }
     }, [checkNextHighImpactNews, todayStr, filter]);
     
@@ -116,7 +118,7 @@ export default function MarketPage() {
         if (window.TradingView && window.TradingView.widget) {
             new window.TradingView.widget({
                 width: "100%",
-                height: 950, // ความสูงกราฟ (ใหญ่สะใจ)
+                height: 950, 
                 symbol,
                 interval: "5", 
                 timezone: "Asia/Bangkok",
@@ -203,10 +205,8 @@ export default function MarketPage() {
                     </div>
                 </header>
 
-                {/* --- GRID LAYOUT ใหม่ --- */}
                 <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 items-start">
                     
-                    {/* คอลัมน์ซ้าย (3 ส่วน): กราฟ + ข่าว */}
                     <div className="xl:col-span-3 flex flex-col gap-6">
                         <section className="bg-zinc-800/80 backdrop-blur-sm rounded-xl shadow-2xl p-4 border border-zinc-700">
                             <div className="flex items-center justify-between mb-2">
@@ -238,15 +238,11 @@ export default function MarketPage() {
                         </section>
                     </div>
 
-                    {/* คอลัมน์ขวา (1 ส่วน): แชท + Watchlist */}
                     <div className="xl:col-span-1 flex flex-col gap-6 sticky top-4">
-                        
-                        {/* ChatPanel (อยู่บนสุด) */}
                         <div className="h-[600px]">
                             <ChatPanel />
                         </div>
 
-                        {/* Watchlist (อยู่ล่างแชท) */}
                         <section className="bg-zinc-800/80 backdrop-blur-sm rounded-xl shadow-2xl p-4 border border-zinc-700">
                             <h2 className="text-lg font-bold flex items-center gap-2 text-yellow-500 mb-3"><FaChartLine /> Watchlist</h2>
                             <div className="space-y-2">
@@ -254,7 +250,11 @@ export default function MarketPage() {
                                     <div className="p-3 bg-gradient-to-r from-zinc-900 to-zinc-800 border border-yellow-500/50 rounded-lg">
                                         <div className="flex justify-between items-center mb-1">
                                             <span className="text-yellow-500 font-bold text-xs">AI SCANNER</span>
-                                            <span className={`px-2 py-0.5 text-[10px] font-bold rounded ${aiData.trend.includes('UP') ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>{aiData.trend}</span>
+                                            {/* --- [จุดที่แก้ไข] ใส่ระบบกันพลาด (Optional Chaining) --- */}
+                                            <span className={`px-2 py-0.5 text-[10px] font-bold rounded ${(aiData.trend || "").includes('UP') ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                                                {aiData.trend || "WAIT"}
+                                            </span>
+                                            {/* ---------------------------------------------------- */}
                                         </div>
                                         <div className="flex justify-between items-end">
                                             <span className="text-lg font-bold text-white">{aiData.symbol}</span>
