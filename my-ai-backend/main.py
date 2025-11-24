@@ -21,32 +21,34 @@ class AnalysisRequest(BaseModel):
 
 def analyze_dynamic(symbol: str, mode: str):
     try:
-        # 1. ตั้งค่าพารามิเตอร์
+        # --- [จุดที่จูน Logic] ปรับระยะ SL/TP ตามสไตล์การเล่น ---
         if mode == "scalping":
+            # สายซิ่ง: ดู M15, SL แคบมาก (0.6 เท่าของความผันผวน), TP สั้น
             interval = "15m"
             period = "5d"
-            sl_mult = 1.5
-            tp_mult = 2.0
-            tf_name = "M15 (ซิ่ง)"
+            sl_mult = 0.6   # <--- ปรับให้แคบลง (เดิม 1.5)
+            tp_mult = 1.2   # เก็บสั้นๆ
+            tf_name = "M15 (Scalping)"
         elif mode == "daytrade":
+            # สายจบในวัน: ดู H1, SL มาตรฐาน (1.5 เท่า)
             interval = "60m"
             period = "1mo"
-            sl_mult = 2.0
-            tp_mult = 2.5
-            tf_name = "H1 (จบในวัน)"
-        else: # swing
+            sl_mult = 1.5
+            tp_mult = 2.0
+            tf_name = "H1 (Day Trade)"
+        else: 
+            # สายถือยาว: ดู Day, SL กว้าง (2.5 เท่า)
             interval = "1d"
             period = "1y"
-            sl_mult = 3.0
-            tp_mult = 3.0
-            tf_name = "D1 (ถือยาว)"
+            sl_mult = 2.5
+            tp_mult = 3.5
+            tf_name = "D1 (Swing Trade)"
+        # -------------------------------------------------------
 
-        # 2. ดึงข้อมูล
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, interval=interval)
         if len(df) < 50: return None
 
-        # 3. คำนวณ Indicator
         df.ta.rsi(length=14, append=True)
         df.ta.ema(length=50, append=True)
         df.ta.macd(append=True)
@@ -60,11 +62,9 @@ def analyze_dynamic(symbol: str, mode: str):
         macd_line = last['MACD_12_26_9']
         macd_signal = last['MACDs_12_26_9']
 
-        # 4. หาจุดเข้า (Dynamic Entry)
         recent_high = df['High'].tail(20).max()
         recent_low = df['Low'].tail(20).min()
 
-        # 5. Scoring
         score = 0
         if price > ema50: score += 1
         if macd_line > macd_signal: score += 1
@@ -74,30 +74,33 @@ def analyze_dynamic(symbol: str, mode: str):
         if score >= 2: bias = "BULLISH (ขาขึ้น)"
         elif score <= 1: bias = "BEARISH (ขาลง)"
 
-        # 6. คำนวณ Setup
-        buy_entry = max(recent_low, ema50) if price > ema50 else recent_low
-        if (price - buy_entry) > (atr * 3): buy_entry = price - atr
+        # คำนวณจุดเข้า (Entry) ให้สมเหตุสมผลกับโหมด
+        # Scalping: พยายามเข้าใกล้เส้น EMA หรือราคาปัจจุบันมากที่สุด (ไม่รอ Pivot ไกลๆ)
+        if mode == "scalping":
+            buy_entry = price if price > ema50 else ema50
+            sell_entry = price if price < ema50 else ema50
+        else:
+            # Day/Swing: รอเข้าที่ Swing High/Low เดิม
+            buy_entry = max(recent_low, ema50) if price > ema50 else recent_low
+            if (price - buy_entry) > (atr * 2): buy_entry = price - (atr * 0.5)
 
+            sell_entry = min(recent_high, ema50) if price < ema50 else recent_high
+            if (sell_entry - price) > (atr * 2): sell_entry = price + (atr * 0.5)
+
+        # คำนวณ SL/TP
         buy_sl = buy_entry - (atr * sl_mult)
         buy_tp = buy_entry + (atr * tp_mult)
-
-        sell_entry = min(recent_high, ema50) if price < ema50 else recent_high
-        if (sell_entry - price) > (atr * 3): sell_entry = price + atr
 
         sell_sl = sell_entry + (atr * sl_mult)
         sell_tp = sell_entry - (atr * tp_mult)
 
-        # --- [จุดที่แก้ไข] ปรับสูตรคำนวณจุด (Pips) ---
-        pips_scale = 10000 # ค่า Default (Forex)
+        # คำนวณ Pips
+        pips_scale = 10000 
         if "JPY" in symbol: pips_scale = 100
-        
-        # แก้ตรงนี้: ทองคำ $1 = 100 จุด
         if "XAU" in symbol or "GC=F" in symbol: pips_scale = 100 
-        
         if "BTC" in symbol: pips_scale = 1
 
         sl_pips = int((buy_entry - buy_sl) * pips_scale)
-        # ---------------------------------------------
 
         return {
             "symbol": symbol,
