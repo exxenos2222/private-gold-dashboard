@@ -21,41 +21,43 @@ class AnalysisRequest(BaseModel):
 
 def analyze_dynamic(symbol: str, mode: str):
     try:
-        # --- 1. กำหนดกลยุทธ์ตามโหมด (Strategy Selector) ---
+        # --- 1. กำหนดกลยุทธ์ตามโหมด ---
         if mode == "scalping":
-            # Strategy: Mean Reversion (BB + Stoch) -> ซิ่ง M15
             interval = "15m"
-            period = "5d"
-            sl_mult = 0.8   # SL แคบ (เข้าเร็วออกเร็ว)
+            # [แก้ไข 1] ดึงย้อนหลังนานขึ้นเป็น 1 เดือน (เพื่อให้ได้แท่งเทียนเยอะๆ ชัวร์ๆ)
+            period = "1mo" 
+            sl_mult = 0.8
             tp_mult = 1.5
             tf_name = "M15 (Sniper BB+Stoch)"
             
         elif mode == "daytrade":
-            # Strategy: Momentum Trend (MACD + EMA Cross) -> จบในวัน H1
             interval = "60m"
             period = "1mo"
-            sl_mult = 1.5   # SL ปานกลาง
+            sl_mult = 1.5
             tp_mult = 2.0
             tf_name = "H1 (Day Trend MACD)"
             
-        else: # swing
-            # Strategy: Major Trend (Golden Cross + ADX) -> ถือยาว D1
+        else: 
             interval = "1d"
-            period = "2y"   # ดึงยาวเพื่อหา EMA200
-            sl_mult = 2.5   # SL กว้างกันสะบัด
-            tp_mult = 4.0   # กินคำโต
+            period = "2y"
+            sl_mult = 2.5
+            tp_mult = 4.0
             tf_name = "D1 (Big Swing Trend)"
 
         # --- 2. ดึงข้อมูล ---
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, interval=interval)
-        if len(df) < 200: return None 
+        
+        # [แก้ไข 2] ลดเกณฑ์ขั้นต่ำลง (จาก 200 เหลือ 30) กันเหนียว
+        if len(df) < 30: return None 
 
         # --- 3. คำนวณ Indicator พื้นฐาน ---
         df.ta.atr(length=14, append=True)
         last = df.iloc[-1]
         price = last['Close']
-        atr = last['ATRr_14']
+        
+        # เช็กว่ามี ATR ไหม ถ้าไม่มีให้ใช้ 0
+        atr = last['ATRr_14'] if pd.notna(last['ATRr_14']) else (price * 0.01)
         
         bias = "SIDEWAY"
         reasons = []
@@ -63,35 +65,36 @@ def analyze_dynamic(symbol: str, mode: str):
         bear_score = 0
 
         # ==========================================
-        # 🧠 LOGIC 1: SCALPING (M15) -> เน้น BB + Stoch
+        # 🧠 LOGIC 1: SCALPING (M15)
         # ==========================================
         if mode == "scalping":
             df.ta.bbands(length=20, std=2, append=True)
-            df.ta.stoch(append=True) # Stochastic
+            df.ta.stoch(append=True)
             
             last = df.iloc[-1]
+            
+            # ป้องกัน Error ถ้าข้อมูลไม่พอคำนวณ BB
+            if 'BBL_20_2.0' not in last: return None
+
             bb_lower = last['BBL_20_2.0']
             bb_upper = last['BBU_20_2.0']
-            stoch_k = last['STOCHk_14_3_3']
+            stoch_k = last['STOCHk_14_3_3'] if 'STOCHk_14_3_3' in last else 50
             
-            # Logic: ราคาชนขอบ + Stoch กลับตัว
             if price <= bb_lower * 1.001 and stoch_k < 25:
-                bull_score += 5 # สัญญาณชัดมาก (Oversold)
+                bull_score += 5 
                 reasons.append("ราคาชนขอบล่าง BB + Stoch Oversold")
             elif price >= bb_upper * 0.999 and stoch_k > 75:
-                bear_score += 5 # สัญญาณชัดมาก (Overbought)
+                bear_score += 5 
                 reasons.append("ราคาชนขอบบน BB + Stoch Overbought")
             else:
-                # ถ้าไม่ชนขอบ ดูโมเมนตัมย่อย
                 if stoch_k < 20: bull_score += 2
                 if stoch_k > 80: bear_score += 2
 
-            # จุดเข้า: ขอบ BB
             buy_entry = bb_lower
             sell_entry = bb_upper
 
         # ==========================================
-        # 🧠 LOGIC 2: DAY TRADE (H1) -> เน้น MACD + EMA
+        # 🧠 LOGIC 2: DAY TRADE (H1)
         # ==========================================
         elif mode == "daytrade":
             df.ta.macd(append=True)
@@ -99,32 +102,30 @@ def analyze_dynamic(symbol: str, mode: str):
             df.ta.ema(length=50, append=True)
             
             last = df.iloc[-1]
-            macd = last['MACD_12_26_9']
-            signal = last['MACDs_12_26_9']
-            ema20 = last['EMA_20']
-            ema50 = last['EMA_50']
+            macd = last['MACD_12_26_9'] if 'MACD_12_26_9' in last else 0
+            signal = last['MACDs_12_26_9'] if 'MACDs_12_26_9' in last else 0
+            ema20 = last['EMA_20'] if 'EMA_20' in last else price
+            ema50 = last['EMA_50'] if 'EMA_50' in last else price
             
-            # Logic: MACD ตัดขึ้น + ราคาอยู่เหนือ EMA
             if macd > signal:
                 bull_score += 2
-                reasons.append("MACD ตัดขึ้น (Momentum มา)")
+                reasons.append("MACD ตัดขึ้น")
             else:
                 bear_score += 2
-                reasons.append("MACD ตัดลง (Momentum หมด)")
+                reasons.append("MACD ตัดลง")
                 
             if ema20 > ema50:
                 bull_score += 3
-                reasons.append("EMA 20 ตัด 50 ขึ้น (Golden Cross เล็ก)")
+                reasons.append("EMA 20 ตัด 50 ขึ้น")
             else:
                 bear_score += 3
-                reasons.append("EMA 20 ตัด 50 ลง (Dead Cross เล็ก)")
+                reasons.append("EMA 20 ตัด 50 ลง")
 
-            # จุดเข้า: เส้น EMA20 (รอย่อ)
             buy_entry = ema20
             sell_entry = ema20
 
         # ==========================================
-        # 🧠 LOGIC 3: SWING TRADE (D1) -> เน้น EMA200 + ADX
+        # 🧠 LOGIC 3: SWING TRADE (D1)
         # ==========================================
         else: 
             df.ta.adx(append=True)
@@ -132,41 +133,36 @@ def analyze_dynamic(symbol: str, mode: str):
             df.ta.ema(length=200, append=True)
             
             last = df.iloc[-1]
-            adx = last['ADX_14']
-            ema50 = last['EMA_50']
-            ema200 = last['EMA_200']
+            adx = last['ADX_14'] if 'ADX_14' in last else 0
+            ema50 = last['EMA_50'] if 'EMA_50' in last else price
+            ema200 = last['EMA_200'] if 'EMA_200' in last else price
             
-            # Logic: ต้องมีเทรนด์ชัดเจน (ADX > 25) และดูโครงสร้างใหญ่
             if adx > 25:
                 reasons.append(f"เทรนด์แข็งแรง (ADX {round(adx,1)})")
                 if ema50 > ema200:
                     bull_score += 5
-                    reasons.append("Golden Cross (EMA50 > EMA200)")
+                    reasons.append("Golden Cross")
                 else:
                     bear_score += 5
-                    reasons.append("Dead Cross (EMA50 < EMA200)")
+                    reasons.append("Dead Cross")
             else:
-                reasons.append("ADX ต่ำ (ตลาดไซด์เวย์)")
+                reasons.append("ADX ต่ำ (ไซด์เวย์)")
             
-            # จุดเข้า: EMA50 หรือ EMA200
             buy_entry = ema50 if price > ema50 else ema200
             sell_entry = ema50 if price < ema50 else ema200
 
-        # --- 4. สรุปผล (Verdict) ---
+        # --- 4. สรุปผล ---
         if bull_score > bear_score: bias = "BULLISH (ขาขึ้น)"
         elif bear_score > bull_score: bias = "BEARISH (ขาลง)"
         
-        # ป้องกัน Entry ไกลเกินความจริง (Dynamic Adjust)
         if (price - buy_entry) > (atr * 3): buy_entry = price - (atr * 1.0)
         if (sell_entry - price) > (atr * 3): sell_entry = price + (atr * 1.0)
 
-        # คำนวณ SL/TP
         buy_sl = buy_entry - (atr * sl_mult)
         buy_tp = buy_entry + (atr * tp_mult)
         sell_sl = sell_entry + (atr * sl_mult)
         sell_tp = sell_entry - (atr * tp_mult)
 
-        # Pips Scale Correction (ทอง $1 = 100 จุด)
         pips_scale = 10000 
         if "JPY" in symbol: pips_scale = 100
         if "XAU" in symbol or "GC=F" in symbol: pips_scale = 100 
@@ -175,7 +171,6 @@ def analyze_dynamic(symbol: str, mode: str):
         buy_pips = int((buy_entry - buy_sl) * pips_scale)
         sell_pips = int((sell_sl - sell_entry) * pips_scale)
 
-        # RSI สำหรับโชว์ (ทั่วไป)
         rsi_show = round(last['RSI_14'], 2) if 'RSI_14' in last else 0
 
         return {
@@ -195,7 +190,6 @@ def analyze_dynamic(symbol: str, mode: str):
 
 @app.post("/analyze_custom")
 def analyze_custom(req: AnalysisRequest):
-    # --- จำกัดแค่ Gold & Bitcoin ตามคำขอ ---
     symbol_map = {
         "GOLD": "GC=F", 
         "BITCOIN": "BTC-USD"
@@ -205,11 +199,10 @@ def analyze_custom(req: AnalysisRequest):
     data = analyze_dynamic(target, req.mode)
     
     if data:
-        # เลือกโชว์แผนหลักตาม Score
         main_trend_icon = "🟢" if "BULLISH" in data['trend'] else "🔴" if "BEARISH" in data['trend'] else "⚠️"
         
         reply = (
-            f"🧠 **AI Pro (3-Brain Logic): {data['symbol']}**\n"
+            f"🧠 **AI Pro (3-Brain): {data['symbol']}**\n"
             f"⚙️ กลยุทธ์: {data['tf_name']}\n"
             f"--------------------\n"
             f"{main_trend_icon} **แนวโน้ม: {data['trend']}**\n"
@@ -227,7 +220,8 @@ def analyze_custom(req: AnalysisRequest):
         )
         return {"reply": reply}
     else:
-        return {"reply": "❌ ข้อมูลไม่เพียงพอ หรือตลาดปิดครับ"}
+        # ถ้ายังไม่ได้อีก ให้บอกสาเหตุ
+        return {"reply": "⚠️ ข้อมูลกราฟไม่เพียงพอสำหรับการวิเคราะห์ (อาจเป็นช่วงตลาดปิด หรือ Data ดีเลย์)"}
 
 @app.get("/analyze/{symbol}")
 def analyze_market(symbol: str):

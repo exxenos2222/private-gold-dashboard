@@ -85,7 +85,6 @@ export default function ChatWidget() {
                         </select>
                     </div>
 
-                    {/* พื้นที่แชท */}
                     <div className="h-80 overflow-y-auto p-4 space-y-4 custom-scrollbar bg-zinc-800/50">
                         {messages.map((msg, i) => (
                             <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -98,7 +97,6 @@ export default function ChatWidget() {
                         <div ref={messagesEndRef} />
                     </div>
 
-                    {/* ปุ่มกดส่งคำสั่ง */}
                     <div className="p-3 bg-zinc-900 border-t border-zinc-700">
                         <button 
                             onClick={requestAnalysis} 
