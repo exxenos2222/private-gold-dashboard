@@ -15,162 +15,160 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-class ChatMessage(BaseModel):
-    message: str
+# รับค่าแบบละเอียดขึ้น (ชื่อเหรียญ + โหมด)
+class AnalysisRequest(BaseModel):
+    symbol: str
+    mode: str # "scalping", "daytrade", "swing"
 
-# --- สมอง AI รุ่น Ultimate (Trend + Score + Setup) ---
-def analyze_logic(symbol: str):
+# --- สมอง AI ปรับเปลี่ยนได้ (Dynamic Logic) ---
+def analyze_dynamic(symbol: str, mode: str):
     try:
-        # 1. ดึงข้อมูล
+        # 1. ตั้งค่าพารามิเตอร์ตามโหมดที่เลือก
+        if mode == "scalping":
+            interval = "15m"
+            period = "5d"
+            sl_mult = 1.5  # SL แคบ
+            tp_mult = 2.0
+            tf_name = "M15 (ซิ่ง)"
+        elif mode == "daytrade":
+            interval = "60m"
+            period = "1mo"
+            sl_mult = 2.0  # SL กลาง
+            tp_mult = 2.5
+            tf_name = "H1 (จบในวัน)"
+        else: # swing
+            interval = "1d"
+            period = "1y"
+            sl_mult = 3.0  # SL กว้าง (กันสะบัด)
+            tp_mult = 3.0
+            tf_name = "D1 (ถือยาว)"
+
+        # 2. ดึงข้อมูล
         ticker = yf.Ticker(symbol)
-        df = ticker.history(period="1y", interval="1d")
+        df = ticker.history(period=period, interval=interval)
         if len(df) < 50: return None
 
-        # 2. คำนวณ Indicator
+        # 3. คำนวณ Indicator
         df.ta.rsi(length=14, append=True)
         df.ta.ema(length=50, append=True)
         df.ta.macd(append=True)
-        df.ta.adx(append=True)
-        df.ta.atr(length=14, append=True) # เพิ่ม ATR เพื่อคำนวณ SL/TP
+        df.ta.atr(length=14, append=True)
 
         last = df.iloc[-1]
-        prev = df.iloc[-2]
-        
         price = last['Close']
         rsi = last['RSI_14']
         ema50 = last['EMA_50']
-        adx = last['ADX_14']
-        atr = last['ATRr_14'] # ค่าความผันผวน
-        
+        atr = last['ATRr_14']
         macd_line = last['MACD_12_26_9']
         macd_signal = last['MACDs_12_26_9']
 
-        # 3. ระบบ Scoring
-        bull_score = 0
-        bear_score = 0
+        # 4. หาจุดเข้า (Dynamic Entry)
+        # หาราคา High/Low ในช่วง 20 แท่งล่าสุดเพื่อเป็นแนวรับต้านระยะสั้น
+        recent_high = df['High'].tail(20).max()
+        recent_low = df['Low'].tail(20).min()
 
-        if price > ema50: bull_score += 2
-        else: bear_score += 2
-
-        if macd_line > macd_signal: bull_score += 1
-        else: bear_score += 1
-
-        if rsi > 50: bull_score += 1
-        else: bear_score += 1
-
-        # 4. คำนวณ Pivot & Setup (Entry / SL / TP)
-        pp = (prev['High'] + prev['Low'] + prev['Close']) / 3
-        r1 = (2 * pp) - prev['Low']
-        s1 = (2 * pp) - prev['High']
-
-        # สูตรคำนวณ SL/TP จาก ATR
-        # Buy Setup (เข้าที่แนวรับ)
-        buy_entry = s1
-        buy_sl = buy_entry - (atr * 1.2)      # SL ต่ำกว่าแนวรับ
-        buy_tp = buy_entry + ((buy_entry - buy_sl) * 1.5) # TP 1.5 เท่า
-
-        sell_entry = r1
-        sell_sl = sell_entry + (atr * 1.2)    
-        sell_tp = sell_entry - ((sell_sl - sell_entry) * 1.5)
+        # 5. Scoring
+        score = 0
+        if price > ema50: score += 1
+        if macd_line > macd_signal: score += 1
+        if rsi > 50: score += 1
 
         bias = "SIDEWAY"
-        action_rec = "รอจังหวะ (Wait)"
-        
-        if bull_score > bear_score:
-            bias = "BULLISH (ขาขึ้น)"
-            if rsi > 70: action_rec = "ระวังย่อตัว (Overbought)"
-            else: action_rec = "✅ ฝั่ง BUY ได้เปรียบ"
-            
-        elif bear_score > bull_score:
-            bias = "BEARISH (ขาลง)"
-            if rsi < 30: action_rec = "ระวังเด้งสวน (Oversold)"
-            else: action_rec = "✅ ฝั่ง SELL ได้เปรียบ"
+        if score >= 2: bias = "BULLISH (ขาขึ้น)"
+        elif score <= 1: bias = "BEARISH (ขาลง)"
 
-        change = price - prev['Close']
-        percent = (change / prev['Close']) * 100
+        # 6. คำนวณ Setup ตามโหมด
+        buy_entry = max(recent_low, ema50) if price > ema50 else recent_low
+        # ปรับจุดเข้าให้ใกล้ปัจจุบันถ้ามันไกลไป
+        if (price - buy_entry) > (atr * 3): buy_entry = price - atr
+
+        buy_sl = buy_entry - (atr * sl_mult)
+        buy_tp = buy_entry + (atr * tp_mult)
+
+        sell_entry = min(recent_high, ema50) if price < ema50 else recent_high
+        if (sell_entry - price) > (atr * 3): sell_entry = price + atr
+
+        sell_sl = sell_entry + (atr * sl_mult)
+        sell_tp = sell_entry - (atr * tp_mult)
+
+        # แปลงระยะเป็นจุด (Pips) โดยประมาณ
+        pips_scale = 100 if "JPY" in symbol else 10000
+        if "XAU" in symbol or "GC=F" in symbol: pips_scale = 10 # ทองคำ
+        if "BTC" in symbol: pips_scale = 1 # คริปโต
+
+        sl_pips = int((buy_entry - buy_sl) * pips_scale)
 
         return {
             "symbol": symbol,
             "price": round(price, 2),
-            "change": round(change, 2),
-            "percent": round(percent, 2),
+            "tf_name": tf_name,
             "trend": bias,
-            "action": action_rec,
-            "score": f"{bull_score} vs {bear_score}",
             "rsi": round(rsi, 2),
-            "buy_setup": {
-                "entry": round(buy_entry, 2),
-                "sl": round(buy_sl, 2),
-                "tp": round(buy_tp, 2)
-            },
-            "sell_setup": {
-                "entry": round(sell_entry, 2),
-                "sl": round(sell_sl, 2),
-                "tp": round(sell_tp, 2)
-            }
+            "sl_pips": abs(sl_pips),
+            "buy_setup": {"entry": round(buy_entry, 2), "sl": round(buy_sl, 2), "tp": round(buy_tp, 2)},
+            "sell_setup": {"entry": round(sell_entry, 2), "sl": round(sell_sl, 2), "tp": round(sell_tp, 2)}
         }
 
     except Exception as e:
         print(f"Error: {e}")
         return None
 
+# API ใหม่: รับทั้งชื่อและโหมด
+@app.post("/analyze_custom")
+def analyze_custom(req: AnalysisRequest):
+    # แปลงชื่อให้ตรงกับ Yahoo Finance
+    symbol_map = {
+        "GOLD": "GC=F", "BITCOIN": "BTC-USD",
+        "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "JPY=X"
+    }
+    target = symbol_map.get(req.symbol.upper(), req.symbol.upper())
+    
+    data = analyze_dynamic(target, req.mode)
+    
+    if data:
+        # เลือกโชว์แผนเดียวตามเทรนด์
+        plan_text = ""
+        if "BULLISH" in data['trend']:
+            plan_text = (
+                f"🟢 **แนะนำฝั่ง BUY**\n"
+                f"   • เข้า: {data['buy_setup']['entry']}\n"
+                f"   • ⛔ SL: {data['buy_setup']['sl']}\n"
+                f"   • ✅ TP: {data['buy_setup']['tp']}"
+            )
+        else:
+            plan_text = (
+                f"🔴 **แนะนำฝั่ง SELL**\n"
+                f"   • เข้า: {data['sell_setup']['entry']}\n"
+                f"   • ⛔ SL: {data['sell_setup']['sl']}\n"
+                f"   • ✅ TP: {data['sell_setup']['tp']}"
+            )
+
+        reply = (
+            f"🎯 **แผนเทรด: {data['symbol']}**\n"
+            f"⏱️ โหมด: {data['tf_name']}\n"
+            f"--------------------\n"
+            f"➤ ราคา: {data['price']}\n"
+            f"➤ สถานะ: {data['trend']} (RSI: {data['rsi']})\n"
+            f"--------------------\n"
+            f"{plan_text}\n"
+            f"--------------------\n"
+            f"*(ระยะ SL ประมาณ {data['sl_pips']} จุด)*"
+        )
+        return {"reply": reply}
+    else:
+        return {"reply": "❌ ไม่สามารถดึงข้อมูลได้ หรือข้อมูลไม่พอครับ"}
+
+# API เก่า (สำหรับ Dashboard หน้าแรก)
 @app.get("/analyze/{symbol}")
 def analyze_market(symbol: str):
-    target = "GC=F" if "XAU" in symbol or "Gold" in symbol else symbol
-    target = "BTC-USD" if "BTC" in symbol else target
-    result = analyze_logic(target)
-    if result: return result
-    return {"symbol": symbol, "price": 0, "trend": "Error"}
-
-@app.post("/chat")
-def chat_with_ai(req: ChatMessage):
-    msg = req.message.lower()
-    target = None
-    if "gold" in msg or "ทอง" in msg: target = "GC=F"
-    elif "btc" in msg or "bitcoin" in msg: target = "BTC-USD"
-
-    if target:
-        data = analyze_logic(target)
-        if data:
-            focus_plan = ""
-            if "BUY" in data['action']:
-                focus_plan = (
-                    f"🟢 **แผนฝั่ง BUY (ตามเทรนด์)**\n"
-                    f"   • Entry: ${data['buy_setup']['entry']}\n"
-                    f"   • ⛔ SL: ${data['buy_setup']['sl']}\n"
-                    f"   • ✅ TP: ${data['buy_setup']['tp']}"
-                )
-            elif "SELL" in data['action']:
-                focus_plan = (
-                    f"🔴 **แผนฝั่ง SELL (ตามเทรนด์)**\n"
-                    f"   • Entry: ${data['sell_setup']['entry']}\n"
-                    f"   • ⛔ SL: ${data['sell_setup']['sl']}\n"
-                    f"   • ✅ TP: ${data['sell_setup']['tp']}"
-                )
-            else:
-                focus_plan = (
-                    f"🟢 **แผนย่อซื้อ (Buy Limit)**\n"
-                    f"   • เข้า: ${data['buy_setup']['entry']} | SL: ${data['buy_setup']['sl']} | TP: ${data['buy_setup']['tp']}\n"
-                    f"--------------------\n"
-                    f"🔴 **แผนเด้งขาย (Sell Limit)**\n"
-                    f"   • เข้า: ${data['sell_setup']['entry']} | SL: ${data['sell_setup']['sl']} | TP: ${data['sell_setup']['tp']}"
-                )
-
-            reply = (
-                f"💎 **AI Setup: {data['symbol']}**\n"
-                f"--------------------\n"
-                f"➤ ราคา: ${data['price']} ({data['trend']})\n"
-                f"➤ RSI: {data['rsi']} | Score: {data['score']}\n"
-                f"📢 สรุป: {data['action']}\n"
-                f"--------------------\n"
-                f"{focus_plan}\n"
-                f"--------------------\n"
-                f"*(คำเตือน: SL คำนวณจากความผันผวน ATR)*"
-            )
-        else: reply = "ขอโทษครับ คำนวณไม่สำเร็จ"
-    elif "hello" in msg:
-        reply = "ผมคือ AI ส่วนตัวของคุณ สอบถามแผนทอง หรือ แผน BTC ได้เลยครับ"
-    else:
-        reply = "พิมพ์ 'วิเคราะห์ทอง' หรือ 'แผน BTC' ได้เลยครับ"
-
-    return {"reply": reply}
+    # โค้ดดึงราคาง่ายๆ สำหรับ Ticker Bar
+    try:
+        ticker = yf.Ticker(symbol)
+        data = ticker.history(period="2d", interval="1h")
+        if data.empty: return {"symbol": symbol, "price": 0, "change":0, "percent":0}
+        price = data['Close'].iloc[-1]
+        prev = data['Close'].iloc[0]
+        change = price - prev
+        percent = (change / prev) * 100
+        return {"symbol": symbol, "price": round(price, 2), "change": round(change, 2), "percent": round(percent, 2)}
+    except: return {"symbol": symbol, "price": 0}

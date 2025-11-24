@@ -293,7 +293,7 @@ export default function MarketPage() {
                         </span>
                     ) : countdown.minutes === 0 ? (
                          <span className="text-red-400 flex items-center gap-1 bg-red-900/40 px-2 py-1 rounded-full animate-pulse">
-                            <FaExclamationTriangle className="w-4 h-4" /> ข่าวสำคัญกำลังจะออก!
+                            <FaExclamationTriangle className="w-4 h-4" /> ข่าวแรงกำลังจะออก!
                         </span>
                     ) : (
                          <span className="text-gray-500 flex items-center gap-1 px-2 py-1 rounded-full">
@@ -434,7 +434,7 @@ export default function MarketPage() {
                                 </div>
                             </div>
 
-                            {loading && <p className="text-center py-4 text-gray-400 flex items-center justify-center gap-2"><FaSyncAlt className="animate-spin" /> กำลังโหลดข่าวสาร...</p>}
+                            {loading && <p className="text-center py-4 text-gray-400 flex items-center justify-center gap-2"><FaSyncAlt className="animate-spin" /> กำลังโหลดข่าวสาร</p>}
                             {error && <p className="text-center py-4 text-red-400 font-medium">{error}</p>}
                             {!loading && !error && news.length === 0 && (
                                 <p className="text-center py-4 text-gray-500">✅ ไม่มีข่าวเศรษฐกิจที่ต้องจับตามองในวันนี้</p>
