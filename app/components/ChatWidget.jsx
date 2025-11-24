@@ -1,6 +1,8 @@
+// app/components/ChatWidget.jsx
+
 'use client'
 import { useState, useRef, useEffect } from 'react'
-import { FaRobot, FaPaperPlane, FaTimes, FaCommentDots, FaCog } from 'react-icons/fa';
+import { FaRobot, FaPaperPlane, FaTimes, FaCog } from 'react-icons/fa';
 
 export default function ChatWidget() {
     const [isOpen, setIsOpen] = useState(false);
@@ -10,24 +12,24 @@ export default function ChatWidget() {
     const [selectedMode, setSelectedMode] = useState("daytrade");
 
     const [messages, setMessages] = useState([
-        { role: 'bot', text: 'สวัสดีครับ 👋 เลือกคู่เงินและโหมดด้านบน แล้วกดส่งเพื่อขอแผนเทรดได้เลย!' }
+        { role: 'bot', text: 'สวัสดีครับ 👋 เลือกคู่เงิน (GOLD/BTC) และโหมดการเทรดด้านบน แล้วกดส่งเพื่อขอแผนได้เลยครับ!' }
     ]);
     const [loading, setLoading] = useState(false);
     const messagesEndRef = useRef(null);
 
+    // เลื่อนแชทลงล่างสุดอัตโนมัติ
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages]);
 
-    // ฟังก์ชันส่งคำสั่งพิเศษ
+    // ฟังก์ชันส่งคำสั่งไปหา AI
     const requestAnalysis = async () => {
         setLoading(true);
-        // เพิ่มข้อความฝั่งเรา
         const userText = `ขอแผน ${selectedSymbol} แบบ ${selectedMode}`;
         setMessages(prev => [...prev, { role: 'user', text: userText }]);
 
         try {
-            // ยิงไปหา API ใหม่ที่เราเพิ่งสร้าง
+            // ยิงไปหา Render Server
             const res = await fetch('https://private-gold-dashboard.onrender.com/analyze_custom', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -39,7 +41,7 @@ export default function ChatWidget() {
             const data = await res.json();
             setMessages(prev => [...prev, { role: 'bot', text: data.reply }]);
         } catch (err) {
-            setMessages(prev => [...prev, { role: 'bot', text: '❌ เชื่อมต่อ Server ไม่ได้ครับ' }]);
+            setMessages(prev => [...prev, { role: 'bot', text: '❌ เชื่อมต่อ Server ไม่ได้ (รอ Render ตื่นสักครู่นะครับ)' }]);
         } finally {
             setLoading(false);
         }
@@ -50,7 +52,7 @@ export default function ChatWidget() {
             {isOpen && (
                 <div className="mb-4 w-80 sm:w-96 bg-zinc-800 border border-yellow-500/30 rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in slide-in-from-bottom-10 duration-300">
                     
-                    {/* Header สีดำ */}
+                    {/* Header */}
                     <div className="bg-zinc-900 p-3 flex justify-between items-center border-b border-yellow-500/20">
                         <div className="flex items-center gap-2">
                             <div className="bg-yellow-500/20 p-1.5 rounded-full"><FaRobot className="text-yellow-500" /></div>
@@ -61,18 +63,17 @@ export default function ChatWidget() {
 
                     {/* --- แผงควบคุม (Control Panel) --- */}
                     <div className="bg-zinc-800 p-3 border-b border-zinc-700 flex gap-2">
+                        {/* เลือกคู่เงิน (เหลือแค่ 2 ตัว) */}
                         <select 
                             value={selectedSymbol}
                             onChange={(e) => setSelectedSymbol(e.target.value)}
                             className="flex-1 bg-zinc-900 text-white text-xs p-2 rounded border border-zinc-600 focus:border-yellow-500 outline-none"
                         >
                             <option value="GOLD">GOLD (ทองคำ)</option>
-                            <option value="BITCOIN">BITCOIN</option>
-                            <option value="EURUSD">EUR/USD</option>
-                            <option value="GBPUSD">GBP/USD</option>
-                            <option value="USDJPY">USD/JPY</option>
+                            <option value="BITCOIN">BITCOIN (คริปโต)</option>
                         </select>
 
+                        {/* เลือกโหมด (3 Timeframe) */}
                         <select 
                             value={selectedMode}
                             onChange={(e) => setSelectedMode(e.target.value)}
@@ -84,6 +85,7 @@ export default function ChatWidget() {
                         </select>
                     </div>
 
+                    {/* พื้นที่แชท */}
                     <div className="h-80 overflow-y-auto p-4 space-y-4 custom-scrollbar bg-zinc-800/50">
                         {messages.map((msg, i) => (
                             <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -92,17 +94,18 @@ export default function ChatWidget() {
                                 </div>
                             </div>
                         ))}
-                        {loading && <div className="flex justify-start"><div className="bg-zinc-700 p-2 rounded-2xl rounded-tl-none text-gray-400 text-xs animate-pulse">กำลังวิเคราะห์กราฟ...</div></div>}
+                        {loading && <div className="flex justify-start"><div className="bg-zinc-700 p-2 rounded-2xl rounded-tl-none text-gray-400 text-xs animate-pulse">🤖 AI กำลังคำนวณแผนเทรด...</div></div>}
                         <div ref={messagesEndRef} />
                     </div>
 
+                    {/* ปุ่มกดส่งคำสั่ง */}
                     <div className="p-3 bg-zinc-900 border-t border-zinc-700">
                         <button 
                             onClick={requestAnalysis} 
                             disabled={loading}
                             className="w-full bg-gradient-to-r from-yellow-600 to-yellow-500 text-zinc-900 font-bold py-2 rounded-lg hover:from-yellow-500 hover:to-yellow-400 transition-all shadow-lg disabled:opacity-50"
                         >
-                            {loading ? 'กำลังคำนวณ...' : '🚀 ขอแผนเทรดเดี๋ยวนี้!'}
+                            {loading ? 'กำลังวิเคราะห์...' : '🚀 ขอแผนเทรดเดี๋ยวนี้!'}
                         </button>
                     </div>
                 </div>
