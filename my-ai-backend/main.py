@@ -24,11 +24,10 @@ def analyze_dynamic(symbol: str, mode: str):
         # --- 1. กำหนดกลยุทธ์ ---
         if mode == "scalping":
             interval = "15m"
-            period = "5d"
+            period = "5d"  # <--- [แก้ไข] ลดเหลือ 5 วัน (Yahoo ส่งข้อมูล M15 ได้สูงสุดแค่นี้แบบเสถียร)
             sl_mult = 0.8
             tp_mult = 1.5
             tf_name = "M15 (Sniper Scalp)"
-            lookback = 20 # ดูย้อนหลัง 20 แท่ง
             
         elif mode == "daytrade":
             interval = "60m"
@@ -36,21 +35,20 @@ def analyze_dynamic(symbol: str, mode: str):
             sl_mult = 1.5
             tp_mult = 2.0
             tf_name = "H1 (Day Trend)"
-            lookback = 24 # ดูย้อนหลัง 24 แท่ง (1 วัน)
             
         else: 
             interval = "1d"
             period = "2y"
-            sl_mult = 2.0 # ลดลงหน่อยเผื่อ SL กว้างเกิน
-            tp_mult = 3.0
+            sl_mult = 2.5
+            tp_mult = 4.0
             tf_name = "D1 (Big Swing)"
-            lookback = 10 # ดูย้อนหลัง 10 วัน
 
         # --- 2. ดึงข้อมูล ---
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, interval=interval)
         
-        if len(df) < 30: return None 
+        # ลดเกณฑ์ลงอีกเผื่อข้อมูลมาน้อยจริงๆ
+        if len(df) < 15: return None 
 
         # --- 3. คำนวณ Indicator ---
         df.ta.atr(length=14, append=True)
@@ -64,19 +62,19 @@ def analyze_dynamic(symbol: str, mode: str):
         bull_score = 0
         bear_score = 0
 
-        # ค่า High/Low ย้อนหลัง (สำหรับหาแนวรับต้าน)
-        recent_high = df['High'].tail(lookback).max()
-        recent_low = df['Low'].tail(lookback).min()
-
         # ==========================================
-        # 🧠 LOGIC 1: SCALPING (M15) -> BB + Stoch
+        # 🧠 LOGIC 1: SCALPING (M15)
         # ==========================================
         if mode == "scalping":
             df.ta.bbands(length=20, std=2, append=True)
             df.ta.stoch(append=True)
+            
             last = df.iloc[-1]
             
-            if 'BBL_20_2.0' not in last: return None
+            # Check Data Availability
+            if 'BBL_20_2.0' not in last or pd.isna(last['BBL_20_2.0']):
+                return None # ถ้าคำนวณ BB ไม่ได้ ให้จบเลย
+
             bb_lower = last['BBL_20_2.0']
             bb_upper = last['BBU_20_2.0']
             stoch_k = last['STOCHk_14_3_3'] if 'STOCHk_14_3_3' in last else 50
@@ -86,14 +84,14 @@ def analyze_dynamic(symbol: str, mode: str):
             elif price >= bb_upper * 0.999:
                 bear_score += 5; reasons.append("ราคาชนขอบบน BB")
             
-            if stoch_k < 20: bull_score += 2
-            if stoch_k > 80: bear_score += 2
+            if stoch_k < 20: bull_score += 2; reasons.append("Stoch Oversold")
+            if stoch_k > 80: bear_score += 2; reasons.append("Stoch Overbought")
 
             buy_entry = bb_lower
             sell_entry = bb_upper
 
         # ==========================================
-        # 🧠 LOGIC 2: DAY TRADE (H1) -> [แก้ใหม่] High/Low 24 ชม.
+        # 🧠 LOGIC 2: DAY TRADE (H1)
         # ==========================================
         elif mode == "daytrade":
             df.ta.macd(append=True)
@@ -109,16 +107,11 @@ def analyze_dynamic(symbol: str, mode: str):
             if macd > signal: bull_score += 2; reasons.append("MACD ตัดขึ้น")
             else: bear_score += 2; reasons.append("MACD ตัดลง")
                 
-            if ema20 > ema50: bull_score += 3; reasons.append("เทรนด์ขาขึ้น (EMA20>50)")
-            else: bear_score += 3; reasons.append("เทรนด์ขาลง (EMA20<50)")
+            if ema20 > ema50: bull_score += 3; reasons.append("EMA 20>50")
+            else: bear_score += 3; reasons.append("EMA 20<50")
 
-            # --- [จุดที่แก้] แยกจุดเข้าให้ชัดเจน ---
-            # Buy: รับที่ Low เดิม หรือ EMA50 (เอาตัวที่ต่ำกว่า เพื่อความปลอดภัย)
-            buy_entry = recent_low
-            
-            # Sell: ต้านที่ High เดิม หรือ EMA50
-            sell_entry = recent_high
-            # ------------------------------------
+            buy_entry = ema20
+            sell_entry = ema20
 
         # ==========================================
         # 🧠 LOGIC 3: SWING TRADE (D1)
@@ -138,7 +131,7 @@ def analyze_dynamic(symbol: str, mode: str):
                 if ema50 > ema200: bull_score += 5; reasons.append("Golden Cross")
                 else: bear_score += 5; reasons.append("Dead Cross")
             else:
-                reasons.append("ADX ต่ำ (ไซด์เวย์)")
+                reasons.append("ADX ต่ำ")
             
             buy_entry = ema50 if price > ema50 else ema200
             sell_entry = ema50 if price < ema50 else ema200
@@ -154,12 +147,10 @@ def analyze_dynamic(symbol: str, mode: str):
             bias = "SIDEWAY"
             action_rec = "⚠️ รอเลือกทาง"
         
-        # ป้องกัน Entry ไกลเกิน (Dynamic Adjust)
-        # ถ้าจุดเข้าไกลกว่า 3 เท่าของ ATR ให้ขยับเข้ามาใกล้หน่อย
-        if (price - buy_entry) > (atr * 3): buy_entry = price - (atr * 2.0)
-        if (sell_entry - price) > (atr * 3): sell_entry = price + (atr * 2.0)
+        # Dynamic Adjust (ป้องกัน Entry ไกลเกิน)
+        if (price - buy_entry) > (atr * 3): buy_entry = price - (atr * 1.0)
+        if (sell_entry - price) > (atr * 3): sell_entry = price + (atr * 1.0)
 
-        # คำนวณ SL/TP
         buy_sl = buy_entry - (atr * sl_mult)
         buy_tp = buy_entry + (atr * tp_mult)
         sell_sl = sell_entry + (atr * sl_mult)
@@ -220,7 +211,7 @@ def analyze_custom(req: AnalysisRequest):
         )
         return {"reply": reply}
     else:
-        return {"reply": "⚠️ ข้อมูลกราฟไม่เพียงพอ (ตลาดอาจปิด หรือ Data ดีเลย์ช่วงสั้นๆ)"}
+        return {"reply": "⚠️ ข้อมูลไม่เพียงพอ (ตลาดปิด หรือ M15 data ขาดช่วง ลองกดใหม่อีกครั้ง)"}
 
 @app.get("/analyze/{symbol}")
 def analyze_market(symbol: str):
