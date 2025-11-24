@@ -18,55 +18,77 @@ app.add_middleware(
 class ChatMessage(BaseModel):
     message: str
 
+# --- สมอง AI รุ่นอัปเกรด (Smart Filter + Trading Plan) ---
 def analyze_logic(symbol: str):
     try:
+        # 1. ดึงข้อมูล (1 ปี)
         ticker = yf.Ticker(symbol)
-        df = ticker.history(period="6mo", interval="1d")
+        df = ticker.history(period="1y", interval="1d")
         
-        if len(df) < 14: return None
+        if len(df) < 50: return None
 
+        # 2. คำนวณ Indicator
         df.ta.rsi(length=14, append=True)
         df.ta.ema(length=50, append=True)
+        df.ta.macd(append=True)
+        df.ta.adx(append=True)
 
-        current_price = df['Close'].iloc[-1]
-        rsi = df['RSI_14'].iloc[-1]
-        ema50 = df['EMA_50'].iloc[-1]
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
         
-        prev_high = df['High'].iloc[-2]
-        prev_low = df['Low'].iloc[-2]
-        prev_close = df['Close'].iloc[-2]
-
-        pp = (prev_high + prev_low + prev_close) / 3
-        r1 = (2 * pp) - prev_low  
-        s1 = (2 * pp) - prev_high 
-
-        trend = "UP (ขาขึ้น)" if current_price > ema50 else "DOWN (ขาลง)"
+        price = last['Close']
+        rsi = last['RSI_14']
+        ema50 = last['EMA_50']
+        adx = last['ADX_14']
         
-        suggestion = "WAIT"
-        if rsi > 70:
-            suggestion = "ระวังแรงขาย! (Overbought)"
-        elif rsi < 30:
-            suggestion = "หาจังหวะเข้าซื้อ (Oversold)"
-        else:
-            if current_price > ema50:
-                suggestion = "ย่อซื้อที่แนวรับ (Buy on Dip)"
-            else:
-                suggestion = "เด้งขายที่แนวต้าน (Sell on Rally)"
+        # MACD
+        macd_line = last['MACD_12_26_9']
+        macd_signal = last['MACDs_12_26_9']
 
+        # 3. คำนวณ Pivot Points (เอามาทำ Buy/Sell Limit)
+        pp = (prev['High'] + prev['Low'] + prev['Close']) / 3
+        r1 = (2 * pp) - prev['Low']
+        s1 = (2 * pp) - prev['High']
+
+        # 4. Logic การตัดสินใจ
+        trend = "UP 🟢" if price > ema50 else "DOWN 🔴"
         
-        change = current_price - df['Close'].iloc[-2]
-        percent = (change / df['Close'].iloc[-2]) * 100
+        trend_strength = "Weak (ไซด์เวย์)"
+        if adx > 25: trend_strength = "Strong (แรง)"
+        if adx > 50: trend_strength = "Very Strong (แรงจัด)"
+
+        suggestion = "WAIT (รอดูท่าที)"
+        
+        if price > ema50: # ขาขึ้น
+            if macd_line > macd_signal and rsi < 70:
+                suggestion = "BUY SIGNAL (ตามน้ำ) 🚀"
+            elif rsi > 70:
+                suggestion = "ระวังแรงขาย (Overbought) ⚠️"
+            elif adx < 20:
+                suggestion = "ตลาดนิ่ง ระวังโดนหลอก"
+        else: # ขาลง
+            if macd_line < macd_signal and rsi > 30:
+                suggestion = "SELL SIGNAL (ทุบ) 📉"
+            elif rsi < 30:
+                suggestion = "ระวังเด้งสวน (Oversold) ⚠️"
+            elif adx < 20:
+                suggestion = "ตลาดนิ่ง ระวังโดนหลอก"
+
+        change = price - prev['Close']
+        percent = (change / prev['Close']) * 100
 
         return {
             "symbol": symbol,
-            "price": round(current_price, 2),
+            "price": round(price, 2),
             "change": round(change, 2),
             "percent": round(percent, 2),
             "trend": trend,
+            "strength": trend_strength,
             "rsi": round(rsi, 2),
+            "macd": "Bullish" if macd_line > macd_signal else "Bearish",
             "suggestion": suggestion,
-            "support": round(s1, 2), 
-            "resistance": round(r1, 2) 
+            "support": round(s1, 2),     # ค่า Buy Limit
+            "resistance": round(r1, 2)   # ค่า Sell Limit
         }
 
     except Exception as e:
@@ -77,7 +99,6 @@ def analyze_logic(symbol: str):
 def analyze_market(symbol: str):
     target = "GC=F" if "XAU" in symbol or "Gold" in symbol else symbol
     target = "BTC-USD" if "BTC" in symbol else target
-    
     result = analyze_logic(target)
     if result: return result
     return {"symbol": symbol, "price": 0, "trend": "Error"}
@@ -85,33 +106,30 @@ def analyze_market(symbol: str):
 @app.post("/chat")
 def chat_with_ai(req: ChatMessage):
     msg = req.message.lower()
-    
-    target_symbol = None
-    if "gold" in msg or "ทอง" in msg: target_symbol = "GC=F"
-    elif "btc" in msg or "bitcoin" in msg: target_symbol = "BTC-USD"
+    target = None
+    if "gold" in msg or "ทอง" in msg: target = "GC=F"
+    elif "btc" in msg or "bitcoin" in msg: target = "BTC-USD"
 
-    if target_symbol:
-        data = analyze_logic(target_symbol)
+    if target:
+        data = analyze_logic(target)
         if data:
             reply = (
-                f"🤖 **วิเคราะห์ {data['symbol']}**\n"
+                f"🧠 **AI Analysis V2.0 ({data['symbol']})**\n"
                 f"--------------------\n"
                 f"➤ ราคา: ${data['price']}\n"
-                f"➤ เทรนด์: {data['trend']}\n"
-                f"➤ RSI: {data['rsi']}\n"
+                f"➤ เทรนด์: {data['trend']} (ความแรง: {data['strength']})\n"
+                f"➤ RSI: {data['rsi']} | MACD: {data['macd']}\n"
                 f"--------------------\n"
                 f"🎯 **แผนการเทรด (Limit Order)**\n"
                 f"🔴 Sell Limit (ต้าน): ${data['resistance']}\n"
                 f"🟢 Buy Limit (รับ): ${data['support']}\n"
                 f"--------------------\n"
-                f"💡 **แนะนำ:** {data['suggestion']}"
+                f"💡 **AI แนะนำ:** {data['suggestion']}"
             )
-        else:
-            reply = "ดึงข้อมูลผิดพลาด ลองใหม่นะครับ"
-            
-    elif "hello" in msg or "สวัสดี" in msg:
-        reply = "อยากสอบถามแผนการเทรดอะไรดี แผนทอง หรือ แผน BTC"
+        else: reply = "ขอโทษครับ คำนวณไม่สำเร็จ"
+    elif "hello" in msg:
+        reply = "สวัสดีครับ! ผมพร้อมวิเคราะห์ทองแบบเจาะลึก + วางแผน Limit Order ให้แล้วครับ"
     else:
-        reply = "ขอโทษครับ ผมยังไม่เข้าใจคำถาม ลองถามเกี่ยวกับทองคำหรือ Bitcoin "
+        reply = "ถามเรื่อง 'วิเคราะห์ทอง' หรือ 'แผนเทรด' ได้เลยครับ"
 
     return {"reply": reply}
