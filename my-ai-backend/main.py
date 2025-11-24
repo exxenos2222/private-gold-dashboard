@@ -19,100 +19,99 @@ class AnalysisRequest(BaseModel):
     symbol: str
     mode: str 
 
-# --- ฟังก์ชันช่วยดึงข้อมูล (พยายามดึงจนกว่าจะได้) ---
-def get_reliable_data(symbol, preferred_interval, preferred_period):
-    # ความพยายามครั้งที่ 1: ตามที่ขอมา
-    df = yf.Ticker(symbol).history(period=preferred_period, interval=preferred_interval)
-    if len(df) > 25: return df, preferred_interval
-
-    # ความพยายามครั้งที่ 2: ถ้า M15 พัง ให้ลอง M30
-    if preferred_interval == "15m":
-        print(f"⚠️ M15 failed for {symbol}, trying M30...")
-        df = yf.Ticker(symbol).history(period="5d", interval="30m")
-        if len(df) > 25: return df, "M30 (Backup)"
-
-    # ความพยายามครั้งที่ 3: ถ้ายังพัง ให้ใช้ H1 (เสถียรสุด)
-    print(f"⚠️ Intraday failed for {symbol}, fallback to H1...")
-    df = yf.Ticker(symbol).history(period="1mo", interval="60m")
-    return df, "H1 (Backup)"
+# --- ฟังก์ชันดึงข้อมูลทองคำแบบ "Spot First" (เอา Spot ขึ้นก่อน) ---
+def get_gold_data_smart(interval, period):
+    # 1. ลองดึง Spot Gold (XAUUSD=X) ก่อน <-- พระเอกของเรา
+    print(f"🔄 Trying Gold Spot (XAUUSD=X) {interval}...")
+    df = yf.Ticker("XAUUSD=X").history(period=period, interval=interval)
+    
+    if len(df) > 25:
+        return df, f"{interval} (Spot)"
+    
+    # 2. ถ้า Spot พัง ค่อยไปลอง Futures (GC=F)
+    print(f"⚠️ Spot failed, switching to Futures (GC=F)...")
+    df = yf.Ticker("GC=F").history(period=period, interval=interval)
+    
+    if len(df) > 25:
+        return df, f"{interval} (Futures)"
+        
+    # 3. ถ้าพังหมด ใช้ H1 Spot มาแทน
+    print(f"❌ All M15 failed, fallback to H1...")
+    df = yf.Ticker("XAUUSD=X").history(period="1mo", interval="60m")
+    return df, "H1 (Emergency)"
 
 def analyze_dynamic(symbol: str, mode: str):
     try:
-        # 1. ตั้งค่าพารามิเตอร์
+        # 1. Config
         if mode == "scalping":
-            req_interval = "15m"
-            req_period = "5d"
-            sl_mult = 0.6
-            tp_mult = 1.2
-            tf_label = "M15 (ซิ่ง)"
+            req_int = "15m"; req_per = "5d"
+            sl_mult = 0.6; tp_mult = 1.2
+            tf_name = "M15 (Scalping)"
         elif mode == "daytrade":
-            req_interval = "60m"
-            req_period = "1mo"
-            sl_mult = 1.5
-            tp_mult = 2.0
-            tf_label = "H1 (จบในวัน)"
+            req_int = "60m"; req_per = "1mo"
+            sl_mult = 1.5; tp_mult = 2.0
+            tf_name = "H1 (Day Trade)"
         else: 
-            req_interval = "1d"
-            req_period = "1y"
-            sl_mult = 2.5
-            tp_mult = 3.5
-            tf_label = "D1 (ถือยาว)"
+            req_int = "1d"; req_per = "1y"
+            sl_mult = 2.5; tp_mult = 3.5
+            tf_name = "D1 (Swing)"
 
-        # 2. ดึงข้อมูลผ่านระบบ Fallback (กันเหนียว)
-        df, actual_tf = get_reliable_data(symbol, req_interval, req_period)
-        
-        if df.empty or len(df) < 20: return None 
+        # 2. Get Data
+        if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
+            df, actual_tf_label = get_gold_data_smart(req_int, req_per)
+        else:
+            # Bitcoin
+            df = yf.Ticker(symbol).history(period=req_per, interval=req_int)
+            actual_tf_label = req_int
+            if len(df) < 25: 
+                df = yf.Ticker(symbol).history(period="1mo", interval="60m")
+                actual_tf_label = "H1 (Backup)"
 
-        # 3. คำนวณ Indicator
-        df.ta.atr(length=14, append=True)
-        
-        # คำนวณ BB & Stoch (ใช้ได้ทุก Timeframe)
-        df.ta.bbands(length=20, std=2, append=True)
-        df.ta.stoch(append=True)
-        df.ta.macd(append=True)
-        df.ta.ema(length=50, append=True)
-        df.ta.adx(append=True)
+        if df.empty: return None
+
+        # 3. Indicators
+        try:
+            df.ta.atr(length=14, append=True)
+            df.ta.rsi(length=14, append=True)
+            df.ta.ema(length=50, append=True)
+            df.ta.bbands(length=20, std=2, append=True)
+            df.ta.macd(append=True)
+        except: pass
 
         last = df.iloc[-1]
         price = last['Close']
         
-        # ถ้าค่าไหนหาไม่ได้ ให้ใช้ค่า Default
-        atr = last['ATRr_14'] if pd.notna(last['ATRr_14']) else (price * 0.005)
-        ema50 = last['EMA_50'] if pd.notna(last['EMA_50']) else price
-        rsi = last['RSI_14'] if 'RSI_14' in last else 50
-        
-        bias = "SIDEWAY"
-        reasons = []
+        atr = last['ATRr_14'] if 'ATRr_14' in last and pd.notna(last['ATRr_14']) else (price * 0.005)
+        rsi = last['RSI_14'] if 'RSI_14' in last and pd.notna(last['RSI_14']) else 50
+        ema50 = last['EMA_50'] if 'EMA_50' in last and pd.notna(last['EMA_50']) else price
+
+        # 4. Scoring
         bull_score = 0
         bear_score = 0
+        reasons = []
 
-        # ==========================================
-        # 🧠 LOGIC: ตัดสินใจ (ใช้ Logic ผสมเพื่อให้รองรับทุก TF)
-        # ==========================================
-        
-        # 1. ดูเทรนด์ (EMA)
-        if price > ema50: bull_score += 2
-        else: bear_score += 2
+        # Trend
+        if price > ema50: bull_score += 2; reasons.append("ราคา > EMA50")
+        else: bear_score += 2; reasons.append("ราคา < EMA50")
 
-        # 2. ดู BB (ของถูก/แพง)
-        if 'BBL_20_2.0' in last:
+        # BB Entry
+        if 'BBL_20_2.0' in last and pd.notna(last['BBL_20_2.0']):
             bb_lower = last['BBL_20_2.0']
             bb_upper = last['BBU_20_2.0']
-            if price <= bb_lower * 1.001: bull_score += 3; reasons.append("ราคาชนขอบล่าง (ของถูก)")
-            if price >= bb_upper * 0.999: bear_score += 3; reasons.append("ราคาชนขอบบน (ของแพง)")
+            if price <= bb_lower * 1.001: bull_score += 3; reasons.append("ชนขอบล่าง BB")
+            if price >= bb_upper * 0.999: bear_score += 3; reasons.append("ชนขอบบน BB")
             
             buy_entry = bb_lower
             sell_entry = bb_upper
         else:
-            buy_entry = price - atr
-            sell_entry = price + atr
+            buy_entry = price - (atr * 0.5)
+            sell_entry = price + (atr * 0.5)
 
-        # 3. ดู MACD (โมเมนตัม)
-        if 'MACD_12_26_9' in last:
-            if last['MACD_12_26_9'] > last['MACDs_12_26_9']: bull_score += 1
-            else: bear_score += 1
+        # RSI
+        if rsi < 30: bull_score += 1; reasons.append("RSI Oversold")
+        if rsi > 70: bear_score += 1; reasons.append("RSI Overbought")
 
-        # --- สรุปผล ---
+        # 5. Verdict
         if bull_score > bear_score:
             bias = "BULLISH"
             action_rec = "🟢 เน้นฝั่ง BUY"
@@ -123,36 +122,34 @@ def analyze_dynamic(symbol: str, mode: str):
             bias = "SIDEWAY"
             action_rec = "⚠️ รอเลือกทาง"
 
-        # ป้องกัน Entry ไกลเกิน (Dynamic Adjust)
-        if (price - buy_entry) > (atr * 4): buy_entry = price - (atr * 1.5)
-        if (sell_entry - price) > (atr * 4): sell_entry = price + (atr * 1.5)
+        # Dynamic Entry Adjust
+        if (price - buy_entry) > (atr * 3): buy_entry = price - (atr * 1.0)
+        if (sell_entry - price) > (atr * 3): sell_entry = price + (atr * 1.0)
 
-        # คำนวณ SL/TP
+        # SL/TP Calculation
         buy_sl = buy_entry - (atr * sl_mult)
         buy_tp = buy_entry + (atr * tp_mult)
         sell_sl = sell_entry + (atr * sl_mult)
         sell_tp = sell_entry - (atr * tp_mult)
 
         pips_scale = 10000 
-        if "JPY" in symbol: pips_scale = 100
-        if "XAU" in symbol or "GC=F" in symbol: pips_scale = 100 
+        if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol: pips_scale = 100 
         if "BTC" in symbol: pips_scale = 1
 
         buy_pips = int((buy_entry - buy_sl) * pips_scale)
         sell_pips = int((sell_sl - sell_entry) * pips_scale)
 
-        # เช็กว่ามีการเปลี่ยน Timeframe หรือไม่
-        final_tf_name = tf_name
-        if actual_tf != req_interval:
-            final_tf_name = f"{tf_name} [ใช้ข้อมูล {actual_tf}]"
+        display_tf = tf_name
+        if "Futures" in actual_tf_label: display_tf += " [Futures]"
+        elif "Backup" in actual_tf_label or "Emergency" in actual_tf_label: display_tf = "H1 (Backup Data)"
 
         return {
             "symbol": symbol,
             "price": round(price, 2),
-            "tf_name": final_tf_name,
+            "tf_name": display_tf,
             "trend": bias,
             "action": action_rec,
-            "reasons": ", ".join(reasons[:2]),
+            "reasons": ", ".join(reasons),
             "rsi": round(rsi, 2),
             "score": f"{bull_score}-{bear_score}",
             "buy_setup": {"entry": round(buy_entry, 2), "sl": round(buy_sl, 2), "tp": round(buy_tp, 2), "pips": buy_pips},
@@ -165,8 +162,7 @@ def analyze_dynamic(symbol: str, mode: str):
 
 @app.post("/analyze_custom")
 def analyze_custom(req: AnalysisRequest):
-    symbol_map = { "GOLD": "GC=F", "BITCOIN": "BTC-USD" }
-    target = symbol_map.get(req.symbol.upper(), req.symbol.upper())
+    target = req.symbol # รับ GOLD หรือ BITCOIN มาตรงๆ เลย แล้วไปจัดการใน analyze_dynamic
     
     data = analyze_dynamic(target, req.mode)
     
@@ -176,8 +172,7 @@ def analyze_custom(req: AnalysisRequest):
             f"--------------------\n"
             f"🎯 **แผนเทรด {data['symbol']}**\n"
             f"⚙️ โหมด: {data['tf_name']}\n"
-            f"📊 สถานะ: {data['trend']} (Score {data['score']})\n"
-            f"💡 เหตุผล: {data['reasons']}\n"
+            f"📊 สถานะ: {data['trend']} (RSI: {data['rsi']})\n"
             f"--------------------\n"
             f"🟢 **BUY Limit**\n"
             f"   • เข้า: {data['buy_setup']['entry']}\n"
@@ -191,12 +186,14 @@ def analyze_custom(req: AnalysisRequest):
         )
         return {"reply": reply}
     else:
-        return {"reply": "❌ ขออภัยครับ ตลาดปิดหรือข้อมูลมีปัญหาจริงๆ กรุณาลองใหม่ภายหลัง"}
+        return {"reply": "❌ ระบบ Data ขัดข้อง กรุณาลองใหม่อีกครั้ง"}
 
 @app.get("/analyze/{symbol}")
 def analyze_market(symbol: str):
+    # Dashboard ใช้ Spot Gold เสมอ
+    target = "XAUUSD=X" if "GC=F" in symbol or "GOLD" in symbol else symbol
     try:
-        ticker = yf.Ticker(symbol)
+        ticker = yf.Ticker(target)
         data = ticker.history(period="2d", interval="1h")
         if data.empty: return {"symbol": symbol, "price": 0, "change":0, "percent":0}
         price = data['Close'].iloc[-1]
