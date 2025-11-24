@@ -15,31 +15,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# รับค่าแบบละเอียดขึ้น (ชื่อเหรียญ + โหมด)
 class AnalysisRequest(BaseModel):
     symbol: str
-    mode: str # "scalping", "daytrade", "swing"
+    mode: str 
 
-# --- สมอง AI ปรับเปลี่ยนได้ (Dynamic Logic) ---
 def analyze_dynamic(symbol: str, mode: str):
     try:
-        # 1. ตั้งค่าพารามิเตอร์ตามโหมดที่เลือก
+        # 1. ตั้งค่าพารามิเตอร์
         if mode == "scalping":
             interval = "15m"
             period = "5d"
-            sl_mult = 1.5  # SL แคบ
+            sl_mult = 1.5
             tp_mult = 2.0
             tf_name = "M15 (ซิ่ง)"
         elif mode == "daytrade":
             interval = "60m"
             period = "1mo"
-            sl_mult = 2.0  # SL กลาง
+            sl_mult = 2.0
             tp_mult = 2.5
             tf_name = "H1 (จบในวัน)"
         else: # swing
             interval = "1d"
             period = "1y"
-            sl_mult = 3.0  # SL กว้าง (กันสะบัด)
+            sl_mult = 3.0
             tp_mult = 3.0
             tf_name = "D1 (ถือยาว)"
 
@@ -63,7 +61,6 @@ def analyze_dynamic(symbol: str, mode: str):
         macd_signal = last['MACDs_12_26_9']
 
         # 4. หาจุดเข้า (Dynamic Entry)
-        # หาราคา High/Low ในช่วง 20 แท่งล่าสุดเพื่อเป็นแนวรับต้านระยะสั้น
         recent_high = df['High'].tail(20).max()
         recent_low = df['Low'].tail(20).min()
 
@@ -77,9 +74,8 @@ def analyze_dynamic(symbol: str, mode: str):
         if score >= 2: bias = "BULLISH (ขาขึ้น)"
         elif score <= 1: bias = "BEARISH (ขาลง)"
 
-        # 6. คำนวณ Setup ตามโหมด
+        # 6. คำนวณ Setup
         buy_entry = max(recent_low, ema50) if price > ema50 else recent_low
-        # ปรับจุดเข้าให้ใกล้ปัจจุบันถ้ามันไกลไป
         if (price - buy_entry) > (atr * 3): buy_entry = price - atr
 
         buy_sl = buy_entry - (atr * sl_mult)
@@ -91,12 +87,17 @@ def analyze_dynamic(symbol: str, mode: str):
         sell_sl = sell_entry + (atr * sl_mult)
         sell_tp = sell_entry - (atr * tp_mult)
 
-        # แปลงระยะเป็นจุด (Pips) โดยประมาณ
-        pips_scale = 100 if "JPY" in symbol else 10000
-        if "XAU" in symbol or "GC=F" in symbol: pips_scale = 10 # ทองคำ
-        if "BTC" in symbol: pips_scale = 1 # คริปโต
+        # --- [จุดที่แก้ไข] ปรับสูตรคำนวณจุด (Pips) ---
+        pips_scale = 10000 # ค่า Default (Forex)
+        if "JPY" in symbol: pips_scale = 100
+        
+        # แก้ตรงนี้: ทองคำ $1 = 100 จุด
+        if "XAU" in symbol or "GC=F" in symbol: pips_scale = 100 
+        
+        if "BTC" in symbol: pips_scale = 1
 
         sl_pips = int((buy_entry - buy_sl) * pips_scale)
+        # ---------------------------------------------
 
         return {
             "symbol": symbol,
@@ -113,10 +114,8 @@ def analyze_dynamic(symbol: str, mode: str):
         print(f"Error: {e}")
         return None
 
-# API ใหม่: รับทั้งชื่อและโหมด
 @app.post("/analyze_custom")
 def analyze_custom(req: AnalysisRequest):
-    # แปลงชื่อให้ตรงกับ Yahoo Finance
     symbol_map = {
         "GOLD": "GC=F", "BITCOIN": "BTC-USD",
         "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "JPY=X"
@@ -126,7 +125,6 @@ def analyze_custom(req: AnalysisRequest):
     data = analyze_dynamic(target, req.mode)
     
     if data:
-        # เลือกโชว์แผนเดียวตามเทรนด์
         plan_text = ""
         if "BULLISH" in data['trend']:
             plan_text = (
@@ -156,12 +154,10 @@ def analyze_custom(req: AnalysisRequest):
         )
         return {"reply": reply}
     else:
-        return {"reply": "❌ ไม่สามารถดึงข้อมูลได้ หรือข้อมูลไม่พอครับ"}
+        return {"reply": "❌ ข้อมูลไม่เพียงพอ"}
 
-# API เก่า (สำหรับ Dashboard หน้าแรก)
 @app.get("/analyze/{symbol}")
 def analyze_market(symbol: str):
-    # โค้ดดึงราคาง่ายๆ สำหรับ Ticker Bar
     try:
         ticker = yf.Ticker(symbol)
         data = ticker.history(period="2d", interval="1h")
