@@ -18,16 +18,12 @@ app.add_middleware(
 class ChatMessage(BaseModel):
     message: str
 
-# --- สมอง AI รุ่นอัปเกรด (Smart Filter + Trading Plan) ---
 def analyze_logic(symbol: str):
     try:
-        # 1. ดึงข้อมูล (1 ปี)
         ticker = yf.Ticker(symbol)
         df = ticker.history(period="1y", interval="1d")
-        
         if len(df) < 50: return None
 
-        # 2. คำนวณ Indicator
         df.ta.rsi(length=14, append=True)
         df.ta.ema(length=50, append=True)
         df.ta.macd(append=True)
@@ -40,39 +36,37 @@ def analyze_logic(symbol: str):
         rsi = last['RSI_14']
         ema50 = last['EMA_50']
         adx = last['ADX_14']
-        
-        # MACD
         macd_line = last['MACD_12_26_9']
         macd_signal = last['MACDs_12_26_9']
 
-        # 3. คำนวณ Pivot Points (เอามาทำ Buy/Sell Limit)
+        bull_score = 0 
+        bear_score = 0  
+
+        if price > ema50: bull_score += 2
+        else: bear_score += 2
+
+        if macd_line > macd_signal: bull_score += 1
+        else: bear_score += 1
+
+        if rsi > 50: bull_score += 1
+        else: bear_score += 1
+
+        bias = "SIDEWAY (เลือกทาง)"
+        action_rec = "รอจังหวะ (Wait)"
+        
+        if bull_score > bear_score:
+            bias = "BULLISH (ขาขึ้น)"
+            if rsi > 70: action_rec = "ฝั่ง BUY ได้เปรียบ (แต่ระวังย่อตัว)"
+            else: action_rec = "✅ เน้นฝั่ง BUY (ซื้อ) ได้เปรียบกว่า"
+            
+        elif bear_score > bull_score:
+            bias = "BEARISH (ขาลง)"
+            if rsi < 30: action_rec = "ฝั่ง SELL ได้เปรียบ (แต่ระวังเด้งสวน)"
+            else: action_rec = "✅ เน้นฝั่ง SELL (ขาย) ได้เปรียบกว่า"
+
         pp = (prev['High'] + prev['Low'] + prev['Close']) / 3
         r1 = (2 * pp) - prev['Low']
         s1 = (2 * pp) - prev['High']
-
-        # 4. Logic การตัดสินใจ
-        trend = "UP 🟢" if price > ema50 else "DOWN 🔴"
-        
-        trend_strength = "Weak (ไซด์เวย์)"
-        if adx > 25: trend_strength = "Strong (แรง)"
-        if adx > 50: trend_strength = "Very Strong (แรงจัด)"
-
-        suggestion = "WAIT (รอดูท่าที)"
-        
-        if price > ema50: # ขาขึ้น
-            if macd_line > macd_signal and rsi < 70:
-                suggestion = "BUY SIGNAL (ตามน้ำ) 🚀"
-            elif rsi > 70:
-                suggestion = "ระวังแรงขาย (Overbought) ⚠️"
-            elif adx < 20:
-                suggestion = "ตลาดนิ่ง ระวังโดนหลอก"
-        else: # ขาลง
-            if macd_line < macd_signal and rsi > 30:
-                suggestion = "SELL SIGNAL (ทุบ) 📉"
-            elif rsi < 30:
-                suggestion = "ระวังเด้งสวน (Oversold) ⚠️"
-            elif adx < 20:
-                suggestion = "ตลาดนิ่ง ระวังโดนหลอก"
 
         change = price - prev['Close']
         percent = (change / prev['Close']) * 100
@@ -82,13 +76,12 @@ def analyze_logic(symbol: str):
             "price": round(price, 2),
             "change": round(change, 2),
             "percent": round(percent, 2),
-            "trend": trend,
-            "strength": trend_strength,
+            "trend": bias,             
+            "action": action_rec,      
+            "score": f"{bull_score} vs {bear_score}",
             "rsi": round(rsi, 2),
-            "macd": "Bullish" if macd_line > macd_signal else "Bearish",
-            "suggestion": suggestion,
-            "support": round(s1, 2),     # ค่า Buy Limit
-            "resistance": round(r1, 2)   # ค่า Sell Limit
+            "support": round(s1, 2),
+            "resistance": round(r1, 2)
         }
 
     except Exception as e:
@@ -114,21 +107,21 @@ def chat_with_ai(req: ChatMessage):
         data = analyze_logic(target)
         if data:
             reply = (
-                f"🧠 **AI Analysis V2.0 ({data['symbol']})**\n"
+                f"🥊 **ผลชี้ขาด AI ({data['symbol']})**\n"
                 f"--------------------\n"
                 f"➤ ราคา: ${data['price']}\n"
-                f"➤ เทรนด์: {data['trend']} (ความแรง: {data['strength']})\n"
-                f"➤ RSI: {data['rsi']} | MACD: {data['macd']}\n"
+                f"➤ ทิศทาง: {data['trend']}\n"
+                f"➤ คะแนนกระทิง vs หมี: {data['score']}\n"
                 f"--------------------\n"
-                f"🎯 **แผนการเทรด (Limit Order)**\n"
-                f"🔴 Sell Limit (ต้าน): ${data['resistance']}\n"
-                f"🟢 Buy Limit (รับ): ${data['support']}\n"
+                f"📢 **คำแนะนำ:** {data['action']}\n"
                 f"--------------------\n"
-                f"💡 **AI แนะนำ:** {data['suggestion']}"
+                f"🎯 **แผนเข้าออเดอร์**\n"
+                f"🔴 Sell Limit: ${data['resistance']}\n"
+                f"🟢 Buy Limit: ${data['support']}"
             )
-        else: reply = "ขอโทษครับ คำนวณไม่สำเร็จ"
+        else: reply = "ขอโทษครับ คำนวณผิดพลาด"
     elif "hello" in msg:
-        reply = "สวัสดีครับ! ผมพร้อมวิเคราะห์ทองแบบเจาะลึก + วางแผน Limit Order ให้แล้วครับ"
+        reply = "สอบถามแผนทอง หรือ แผน BTC ได้เลยครับ"
     else:
         reply = "ถามเรื่อง 'วิเคราะห์ทอง' หรือ 'แผนเทรด' ได้เลยครับ"
 
