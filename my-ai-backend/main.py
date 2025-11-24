@@ -21,37 +21,37 @@ class AnalysisRequest(BaseModel):
 
 def analyze_dynamic(symbol: str, mode: str):
     try:
-        # --- [จุดที่จูน Logic] ปรับระยะ SL/TP ตามสไตล์การเล่น ---
+        # 1. ตั้งค่าพารามิเตอร์ (จูนความแม่นยำ)
         if mode == "scalping":
-            # สายซิ่ง: ดู M15, SL แคบมาก (0.6 เท่าของความผันผวน), TP สั้น
             interval = "15m"
             period = "5d"
-            sl_mult = 0.6   # <--- ปรับให้แคบลง (เดิม 1.5)
-            tp_mult = 1.2   # เก็บสั้นๆ
+            sl_mult = 0.6   # SL แคบ (300-500 จุด)
+            tp_mult = 1.2   # เก็บสั้น
             tf_name = "M15 (Scalping)"
+            lookback = 12   # ย้อนหลัง 12 แท่ง (3 ชม.)
         elif mode == "daytrade":
-            # สายจบในวัน: ดู H1, SL มาตรฐาน (1.5 เท่า)
             interval = "60m"
             period = "1mo"
-            sl_mult = 1.5
-            tp_mult = 2.0
+            sl_mult = 1.5   # SL กลาง (800-1500 จุด)
+            tp_mult = 2.0   # R:R 1:2
             tf_name = "H1 (Day Trade)"
-        else: 
-            # สายถือยาว: ดู Day, SL กว้าง (2.5 เท่า)
+            lookback = 24   # ย้อนหลัง 24 แท่ง (1 วัน)
+        else: # swing
             interval = "1d"
             period = "1y"
-            sl_mult = 2.5
-            tp_mult = 3.5
+            sl_mult = 2.5   # SL กว้าง (2000+ จุด)
+            tp_mult = 3.0   # R:R 1:3
             tf_name = "D1 (Swing Trade)"
-        # -------------------------------------------------------
+            lookback = 10   # ย้อนหลัง 10 แท่ง (2 สัปดาห์)
 
+        # 2. ดึงข้อมูล
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, interval=interval)
         if len(df) < 50: return None
 
+        # 3. คำนวณ Indicator
         df.ta.rsi(length=14, append=True)
         df.ta.ema(length=50, append=True)
-        df.ta.macd(append=True)
         df.ta.atr(length=14, append=True)
 
         last = df.iloc[-1]
@@ -59,48 +59,53 @@ def analyze_dynamic(symbol: str, mode: str):
         rsi = last['RSI_14']
         ema50 = last['EMA_50']
         atr = last['ATRr_14']
-        macd_line = last['MACD_12_26_9']
-        macd_signal = last['MACDs_12_26_9']
 
-        recent_high = df['High'].tail(20).max()
-        recent_low = df['Low'].tail(20).min()
+        # 4. หาแนวรับ/แนวต้าน (Support & Resistance)
+        # ใช้ High/Low ย้อนหลังตาม Lookback ที่ตั้งไว้
+        recent_high = df['High'].tail(lookback).max()
+        recent_low = df['Low'].tail(lookback).min()
 
-        score = 0
-        if price > ema50: score += 1
-        if macd_line > macd_signal: score += 1
-        if rsi > 50: score += 1
-
+        # 5. Scoring (ดูเทรนด์)
         bias = "SIDEWAY"
-        if score >= 2: bias = "BULLISH (ขาขึ้น)"
-        elif score <= 1: bias = "BEARISH (ขาลง)"
+        if price > ema50: bias = "BULLISH (ขาขึ้น)"
+        elif price < ema50: bias = "BEARISH (ขาลง)"
 
-        # คำนวณจุดเข้า (Entry) ให้สมเหตุสมผลกับโหมด
-        # Scalping: พยายามเข้าใกล้เส้น EMA หรือราคาปัจจุบันมากที่สุด (ไม่รอ Pivot ไกลๆ)
-        if mode == "scalping":
-            buy_entry = price if price > ema50 else ema50
-            sell_entry = price if price < ema50 else ema50
+        # 6. คำนวณจุดเข้า (Entry Logic)
+        
+        # --- PLAN A: BUY LIMIT (รอซื้อที่แนวรับ) ---
+        # รับที่ Low เดิม หรือ EMA50 (แล้วแต่ว่าอะไรใกล้ราคากว่ากัน)
+        if price > ema50:
+            buy_entry = max(recent_low, ema50) # ขาขึ้น รับที่ EMA หรือ Low
         else:
-            # Day/Swing: รอเข้าที่ Swing High/Low เดิม
-            buy_entry = max(recent_low, ema50) if price > ema50 else recent_low
-            if (price - buy_entry) > (atr * 2): buy_entry = price - (atr * 0.5)
+            buy_entry = recent_low # ขาลง รอรับที่ Low ต่ำสุดเลย (ปลอดภัย)
+            
+        # ป้องกัน Entry ไกลเกินไป (Dynamic Adjust)
+        if (price - buy_entry) > (atr * 4): buy_entry = price - (atr * 2)
 
-            sell_entry = min(recent_high, ema50) if price < ema50 else recent_high
-            if (sell_entry - price) > (atr * 2): sell_entry = price + (atr * 0.5)
-
-        # คำนวณ SL/TP
         buy_sl = buy_entry - (atr * sl_mult)
         buy_tp = buy_entry + (atr * tp_mult)
+
+        # --- PLAN B: SELL LIMIT (รอขายที่แนวต้าน) ---
+        # ขายที่ High เดิม หรือ EMA50
+        if price < ema50:
+            sell_entry = min(recent_high, ema50) # ขาลง ขายที่ EMA หรือ High
+        else:
+            sell_entry = recent_high # ขาขึ้น รอขายที่ High สูงสุด (Counter Trend)
+
+        # ป้องกัน Entry ไกลเกินไป
+        if (sell_entry - price) > (atr * 4): sell_entry = price + (atr * 2)
 
         sell_sl = sell_entry + (atr * sl_mult)
         sell_tp = sell_entry - (atr * tp_mult)
 
-        # คำนวณ Pips
+        # 7. คำนวณ Pips (ทองคำ)
         pips_scale = 10000 
         if "JPY" in symbol: pips_scale = 100
         if "XAU" in symbol or "GC=F" in symbol: pips_scale = 100 
         if "BTC" in symbol: pips_scale = 1
 
-        sl_pips = int((buy_entry - buy_sl) * pips_scale)
+        buy_sl_pips = int((buy_entry - buy_sl) * pips_scale)
+        sell_sl_pips = int((sell_sl - sell_entry) * pips_scale)
 
         return {
             "symbol": symbol,
@@ -108,9 +113,18 @@ def analyze_dynamic(symbol: str, mode: str):
             "tf_name": tf_name,
             "trend": bias,
             "rsi": round(rsi, 2),
-            "sl_pips": abs(sl_pips),
-            "buy_setup": {"entry": round(buy_entry, 2), "sl": round(buy_sl, 2), "tp": round(buy_tp, 2)},
-            "sell_setup": {"entry": round(sell_entry, 2), "sl": round(sell_sl, 2), "tp": round(sell_tp, 2)}
+            "buy_setup": {
+                "entry": round(buy_entry, 2), 
+                "sl": round(buy_sl, 2), 
+                "tp": round(buy_tp, 2),
+                "pips": buy_sl_pips
+            },
+            "sell_setup": {
+                "entry": round(sell_entry, 2), 
+                "sl": round(sell_sl, 2), 
+                "tp": round(sell_tp, 2),
+                "pips": sell_sl_pips
+            }
         }
 
     except Exception as e:
@@ -128,36 +142,30 @@ def analyze_custom(req: AnalysisRequest):
     data = analyze_dynamic(target, req.mode)
     
     if data:
-        plan_text = ""
-        if "BULLISH" in data['trend']:
-            plan_text = (
-                f"🟢 **แนะนำฝั่ง BUY**\n"
-                f"   • เข้า: {data['buy_setup']['entry']}\n"
-                f"   • ⛔ SL: {data['buy_setup']['sl']}\n"
-                f"   • ✅ TP: {data['buy_setup']['tp']}"
-            )
-        else:
-            plan_text = (
-                f"🔴 **แนะนำฝั่ง SELL**\n"
-                f"   • เข้า: {data['sell_setup']['entry']}\n"
-                f"   • ⛔ SL: {data['sell_setup']['sl']}\n"
-                f"   • ✅ TP: {data['sell_setup']['tp']}"
-            )
-
+        # --- สร้างข้อความตอบกลับแบบ 2 แผน (Dual Plan) ---
         reply = (
-            f"🎯 **แผนเทรด: {data['symbol']}**\n"
+            f"🎯 **แผนเทรดคู่: {data['symbol']}**\n"
             f"⏱️ โหมด: {data['tf_name']}\n"
             f"--------------------\n"
+            f"📊 **สถานะตลาด**\n"
             f"➤ ราคา: {data['price']}\n"
-            f"➤ สถานะ: {data['trend']} (RSI: {data['rsi']})\n"
+            f"➤ แนวโน้ม: {data['trend']} (RSI: {data['rsi']})\n"
             f"--------------------\n"
-            f"{plan_text}\n"
+            f"🟢 **แผนย่อซื้อ (BUY Limit)**\n"
+            f"   • เข้า: {data['buy_setup']['entry']}\n"
+            f"   • ⛔ SL: {data['buy_setup']['sl']}\n"
+            f"   • ✅ TP: {data['buy_setup']['tp']}\n"
+            f"   *(SL: ~{data['buy_setup']['pips']} จุด)*\n"
             f"--------------------\n"
-            f"*(ระยะ SL ประมาณ {data['sl_pips']} จุด)*"
+            f"🔴 **แผนเด้งขาย (SELL Limit)**\n"
+            f"   • เข้า: {data['sell_setup']['entry']}\n"
+            f"   • ⛔ SL: {data['sell_setup']['sl']}\n"
+            f"   • ✅ TP: {data['sell_setup']['tp']}\n"
+            f"   *(SL: ~{data['sell_setup']['pips']} จุด)*"
         )
         return {"reply": reply}
     else:
-        return {"reply": "❌ ข้อมูลไม่เพียงพอ"}
+        return {"reply": "❌ ไม่สามารถวิเคราะห์ข้อมูลได้ในขณะนี้ครับ"}
 
 @app.get("/analyze/{symbol}")
 def analyze_market(symbol: str):
