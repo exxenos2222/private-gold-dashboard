@@ -6,6 +6,10 @@ import { FaUser, FaLock } from "react-icons/fa";
 export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  
+  // 1. เพิ่ม State สำหรับ Remember Me
+  const [rememberMe, setRememberMe] = useState(false); 
+  
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const router = useRouter();
@@ -21,7 +25,8 @@ export default function LoginPage() {
       const res = await fetch("/api/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
+        // 2. ส่งค่า rememberMe ไปที่ API พร้อม username/password
+        body: JSON.stringify({ username, password, rememberMe }), 
       });
 
       const data = await res.json();
@@ -45,7 +50,7 @@ export default function LoginPage() {
       <div className="relative z-10 bg-white/10 backdrop-blur-2xl p-10 rounded-3xl shadow-2xl w-full max-w-sm">
         
         <h2 className="text-4xl font-bold text-white text-center mb-8">
-          Sing In
+          Sign In
         </h2>
 
         <form onSubmit={handleLogin} className="flex flex-col gap-5">
@@ -57,14 +62,12 @@ export default function LoginPage() {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder="Username"
-
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
                   passwordRef.current?.focus();
                 }
               }}
-
               className="pl-10 pr-4 py-2 rounded-lg bg-white/20 text-white border border-white/40 w-full outline-none focus:ring-2 focus:ring-white/80"
             />
           </div>
@@ -72,13 +75,26 @@ export default function LoginPage() {
           <div className="relative">
             <FaLock className="absolute left-3 top-3 text-white/70" />
             <input
-              ref={passwordRef} // 
+              ref={passwordRef}
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Password"
               className="pl-10 pr-4 py-2 rounded-lg bg-white/20 text-white border border-white/40 w-full outline-none focus:ring-2 focus:ring-white/80"
             />
+          </div>
+
+          <div className="flex items-center gap-2 ml-1">
+            <input
+              id="remember-me"
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              className="w-4 h-4 rounded bg-white/20 border-white/40 text-purple-600 focus:ring-purple-500 cursor-pointer accent-purple-500"
+            />
+            <label htmlFor="remember-me" className="text-white text-sm cursor-pointer select-none">
+              Remember me (7 days)
+            </label>
           </div>
 
           <button

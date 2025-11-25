@@ -34,7 +34,6 @@ export default function ChatPanel() {
         setMessages(prev => [...prev, { role: 'user', text: text }]);
 
         try {
-            // ยิงไปหา Render (Server จริง)
             const res = await fetch('https://private-gold-dashboard.onrender.com/analyze_custom', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

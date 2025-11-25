@@ -19,32 +19,26 @@ class AnalysisRequest(BaseModel):
     symbol: str
     mode: str 
 
-# --- ฟังก์ชันดึงข้อมูล (Safe Mode) ---
 def get_data_safe(symbol, interval, period):
-    # 1. ลองดึง Spot Gold ก่อน (ถ้าเป็นทอง)
     if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
         try:
             df = yf.Ticker("XAUUSD=X").history(period=period, interval=interval)
             if len(df) > 15: return df, f"{interval} (Spot)"
         except: pass
         
-        # สำรอง: Futures
         try:
             df = yf.Ticker("GC=F").history(period=period, interval=interval)
             if len(df) > 15: return df, f"{interval} (Futures)"
         except: pass
 
-    # 2. กรณี Bitcoin หรือคู่อื่น
     else:
         try:
             df = yf.Ticker(symbol).history(period=period, interval=interval)
             if len(df) > 15: return df, interval
         except: pass
 
-    # 3. ไม้ตายสุดท้าย: ดึง H1 มาใช้แทน (กันตาย)
     print("⚠️ Fetch failed, using fallback H1...")
     try:
-        # ใช้ Spot Gold ถ้าเป็นทอง
         fallback_sym = "XAUUSD=X" if "GC=F" in symbol or "GOLD" in symbol else symbol
         df = yf.Ticker(fallback_sym).history(period="1mo", interval="60m")
         return df, "H1 (Backup Data)"
@@ -53,7 +47,7 @@ def get_data_safe(symbol, interval, period):
 
 def analyze_dynamic(symbol: str, mode: str):
     try:
-        # Config
+        
         if mode == "scalping":
             req_int = "15m"; req_per = "5d"; sl_mult = 0.6; tp_mult = 1.2; tf_name = "M15 (ซิ่ง)"
         elif mode == "daytrade":
@@ -61,21 +55,17 @@ def analyze_dynamic(symbol: str, mode: str):
         else: 
             req_int = "1d"; req_per = "1y"; sl_mult = 2.5; tp_mult = 3.5; tf_name = "D1 (ถือยาว)"
 
-        # Get Data
         df, actual_tf_label = get_data_safe(symbol, req_int, req_per)
         
         if df.empty or len(df) < 10: return None 
 
-        # --- Calculation Block (กัน Error) ---
         last = df.iloc[-1]
         price = last['Close']
         
-        # Default Indicators
         atr = price * 0.005
         rsi = 50
         ema50 = price
         
-        # พยายามคำนวณ Indicator ทีละตัว (ตัวไหนพังให้ข้าม)
         try: 
             df.ta.atr(length=14, append=True)
             if pd.notna(df['ATRr_14'].iloc[-1]): atr = df['ATRr_14'].iloc[-1]
@@ -91,7 +81,7 @@ def analyze_dynamic(symbol: str, mode: str):
             if pd.notna(df['EMA_50'].iloc[-1]): ema50 = df['EMA_50'].iloc[-1]
         except: pass
 
-        # Scoring
+        
         bull_score = 0
         bear_score = 0
         reasons = []
@@ -102,7 +92,6 @@ def analyze_dynamic(symbol: str, mode: str):
         if rsi < 30: bull_score += 2; reasons.append("RSI Oversold")
         elif rsi > 70: bear_score += 2; reasons.append("RSI Overbought")
 
-        # พยายามใช้ Bollinger Bands
         buy_entry = price - atr
         sell_entry = price + atr
         
@@ -120,7 +109,6 @@ def analyze_dynamic(symbol: str, mode: str):
                     if price >= bb_upper: bear_score += 3; reasons.append("ชนขอบบน BB")
         except: pass
 
-        # Verdict
         if bull_score > bear_score:
             bias = "BULLISH"
             action_rec = "🟢 เน้นฝั่ง BUY"
@@ -131,11 +119,10 @@ def analyze_dynamic(symbol: str, mode: str):
             bias = "SIDEWAY"
             action_rec = "⚠️ รอเลือกทาง"
 
-        # Safety Check: Entry
         if (price - buy_entry) > (atr * 5): buy_entry = price - atr
         if (sell_entry - price) > (atr * 5): sell_entry = price + atr
 
-        # Setup
+        
         buy_sl = buy_entry - (atr * sl_mult)
         buy_tp = buy_entry + (atr * tp_mult)
         sell_sl = sell_entry + (atr * sl_mult)
@@ -192,7 +179,6 @@ def analyze_custom(req: AnalysisRequest):
 @app.get("/analyze/{symbol}")
 def analyze_market(symbol: str):
     try:
-        # ใช้ Spot Gold เสมอเพื่อความชัวร์
         target = "XAUUSD=X" if "GC=F" in symbol or "GOLD" in symbol else symbol
         ticker = yf.Ticker(target)
         data = ticker.history(period="2d", interval="1h")
