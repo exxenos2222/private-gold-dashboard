@@ -19,32 +19,45 @@ class AnalysisRequest(BaseModel):
     symbol: str
     mode: str 
 
+# --- ฟังก์ชันดึงราคา Real-time ล่าสุด (เพื่อจูนราคา) ---
+def get_current_price(symbol):
+    try:
+        # ถ้าเป็นทอง ให้บังคับดู Spot Gold (XAUUSD=X) เพื่อความแม่นยำ
+        target = "XAUUSD=X" if "GC=F" in symbol or "GOLD" in symbol else symbol
+        
+        # ดึงกราฟ 1 นาที ล่าสุด
+        df = yf.Ticker(target).history(period="1d", interval="1m")
+        if not df.empty:
+            return df['Close'].iloc[-1]
+    except: pass
+    return None
+
 def get_data_safe(symbol, interval, period):
-    # 1. ลองดึง Spot Gold ก่อน
+    # 1. Spot Gold
     if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
         try:
             df = yf.Ticker("XAUUSD=X").history(period=period, interval=interval)
             if len(df) > 15: return df, f"{interval} (Spot)"
         except: pass
         
+        # 2. Futures (Backup)
         try:
             df = yf.Ticker("GC=F").history(period=period, interval=interval)
             if len(df) > 15: return df, f"{interval} (Futures)"
         except: pass
 
-    # 2. กรณี Bitcoin หรืออื่นๆ
+    # 3. General
     else:
         try:
             df = yf.Ticker(symbol).history(period=period, interval=interval)
             if len(df) > 15: return df, interval
         except: pass
 
-    # 3. Fallback H1
-    print("⚠️ Fetch failed, using fallback H1...")
+    # 4. Fallback
     try:
         fallback_sym = "XAUUSD=X" if "GC=F" in symbol or "GOLD" in symbol else symbol
         df = yf.Ticker(fallback_sym).history(period="1mo", interval="60m")
-        return df, "H1 (Backup Data)"
+        return df, "H1 (Backup)"
     except:
         return pd.DataFrame(), "Error"
 
@@ -60,12 +73,27 @@ def analyze_dynamic(symbol: str, mode: str):
 
         # Get Data
         df, actual_tf_label = get_data_safe(symbol, req_int, req_per)
-        
         if df.empty or len(df) < 10: return None 
 
         # Indicators
         last = df.iloc[-1]
-        price = last['Close']
+        raw_price = last['Close'] # ราคาดิบจากกราฟที่ดึงมา (อาจจะดีเลย์)
+        
+        # --- [NEW] ระบบจูนราคา (Calibration) ---
+        real_price = get_current_price(symbol) # ราคาจริง ณ วินาทีนี้
+        
+        # ถ้าหาดึงราคาจริงได้ ให้ใช้ราคาจริงเป็นฐาน
+        if real_price and abs(real_price - raw_price) > 0.5:
+            price = real_price
+            offset = real_price - raw_price # ส่วนต่างราคา (เช่น +10)
+            is_calibrated = True
+        else:
+            price = raw_price
+            offset = 0
+            is_calibrated = False
+        # --------------------------------------
+
+        # Default Indicators
         atr = price * 0.005
         rsi = 50
         ema50 = price
@@ -82,7 +110,8 @@ def analyze_dynamic(symbol: str, mode: str):
 
         try:
             df.ta.ema(length=50, append=True)
-            if pd.notna(df['EMA_50'].iloc[-1]): ema50 = df['EMA_50'].iloc[-1]
+            # EMA ต้องบวก Offset ด้วย เพื่อให้เส้นขยับตามราคาจริง
+            if pd.notna(df['EMA_50'].iloc[-1]): ema50 = df['EMA_50'].iloc[-1] + offset
         except: pass
 
         # Scoring
@@ -96,20 +125,21 @@ def analyze_dynamic(symbol: str, mode: str):
         if rsi < 30: bull_score += 2; reasons.append("RSI Oversold")
         elif rsi > 70: bear_score += 2; reasons.append("RSI Overbought")
 
+        # Entry Calculation (ต้องบวก Offset เข้าไปในทุกจุด)
         buy_entry = price - atr
         sell_entry = price + atr
         
         try:
             df.ta.bbands(length=20, std=2, append=True)
             if 'BBL_20_2.0' in df.columns:
-                bb_lower = df['BBL_20_2.0'].iloc[-1]
-                bb_upper = df['BBU_20_2.0'].iloc[-1]
+                bb_lower = df['BBL_20_2.0'].iloc[-1] + offset # จูนราคา
+                bb_upper = df['BBU_20_2.0'].iloc[-1] + offset # จูนราคา
                 
                 if pd.notna(bb_lower) and pd.notna(bb_upper):
                     buy_entry = bb_lower
                     sell_entry = bb_upper
-                    if price <= bb_lower: bull_score += 3
-                    if price >= bb_upper: bear_score += 3
+                    if price <= bb_lower * 1.001: bull_score += 3
+                    if price >= bb_upper * 0.999: bear_score += 3
         except: pass
 
         # Verdict
@@ -123,6 +153,7 @@ def analyze_dynamic(symbol: str, mode: str):
             bias = "SIDEWAY"
             action_rec = "⚠️ รอเลือกทาง"
 
+        # Safety Entry Adjustment
         if (price - buy_entry) > (atr * 5): buy_entry = price - atr
         if (sell_entry - price) > (atr * 5): sell_entry = price + atr
 
@@ -136,10 +167,15 @@ def analyze_dynamic(symbol: str, mode: str):
         if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol: pips_scale = 100 
         if "BTC" in symbol: pips_scale = 1
 
+        # ปรับชื่อ Timeframe ให้รู้ว่ามีการจูนราคา
+        final_tf_name = actual_tf_label
+        if is_calibrated:
+            final_tf_name += " ⚡(Live Price)"
+
         return {
             "symbol": symbol,
             "price": round(price, 2),
-            "tf_name": actual_tf_label,
+            "tf_name": final_tf_name,
             "trend": bias,
             "action": action_rec,
             "reasons": ", ".join(reasons[:3]),
@@ -164,7 +200,7 @@ def analyze_custom(req: AnalysisRequest):
             f"--------------------\n"
             f"🎯 **แผนเทรด {data['symbol']}**\n"
             f"⚙️ ข้อมูล: {data['tf_name']}\n"
-            f"💰 **ราคาปัจจุบัน: ${data['price']}**\n"  # <--- [เพิ่มตรงนี้ครับ]
+            f"💰 **ราคาปัจจุบัน: ${data['price']}**\n"
             f"📊 สถานะ: {data['trend']} (RSI: {data['rsi']})\n"
             f"--------------------\n"
             f"🟢 **BUY Limit**\n"
