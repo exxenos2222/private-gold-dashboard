@@ -20,6 +20,7 @@ class AnalysisRequest(BaseModel):
     mode: str 
 
 def get_data_safe(symbol, interval, period):
+    # 1. ลองดึง Spot Gold ก่อน
     if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
         try:
             df = yf.Ticker("XAUUSD=X").history(period=period, interval=interval)
@@ -31,12 +32,14 @@ def get_data_safe(symbol, interval, period):
             if len(df) > 15: return df, f"{interval} (Futures)"
         except: pass
 
+    # 2. กรณี Bitcoin หรืออื่นๆ
     else:
         try:
             df = yf.Ticker(symbol).history(period=period, interval=interval)
             if len(df) > 15: return df, interval
         except: pass
 
+    # 3. Fallback H1
     print("⚠️ Fetch failed, using fallback H1...")
     try:
         fallback_sym = "XAUUSD=X" if "GC=F" in symbol or "GOLD" in symbol else symbol
@@ -47,7 +50,7 @@ def get_data_safe(symbol, interval, period):
 
 def analyze_dynamic(symbol: str, mode: str):
     try:
-        
+        # Config
         if mode == "scalping":
             req_int = "15m"; req_per = "5d"; sl_mult = 0.6; tp_mult = 1.2; tf_name = "M15 (ซิ่ง)"
         elif mode == "daytrade":
@@ -55,13 +58,14 @@ def analyze_dynamic(symbol: str, mode: str):
         else: 
             req_int = "1d"; req_per = "1y"; sl_mult = 2.5; tp_mult = 3.5; tf_name = "D1 (ถือยาว)"
 
+        # Get Data
         df, actual_tf_label = get_data_safe(symbol, req_int, req_per)
         
         if df.empty or len(df) < 10: return None 
 
+        # Indicators
         last = df.iloc[-1]
         price = last['Close']
-        
         atr = price * 0.005
         rsi = 50
         ema50 = price
@@ -81,7 +85,7 @@ def analyze_dynamic(symbol: str, mode: str):
             if pd.notna(df['EMA_50'].iloc[-1]): ema50 = df['EMA_50'].iloc[-1]
         except: pass
 
-        
+        # Scoring
         bull_score = 0
         bear_score = 0
         reasons = []
@@ -104,11 +108,11 @@ def analyze_dynamic(symbol: str, mode: str):
                 if pd.notna(bb_lower) and pd.notna(bb_upper):
                     buy_entry = bb_lower
                     sell_entry = bb_upper
-                    
-                    if price <= bb_lower: bull_score += 3; reasons.append("ชนขอบล่าง BB")
-                    if price >= bb_upper: bear_score += 3; reasons.append("ชนขอบบน BB")
+                    if price <= bb_lower: bull_score += 3
+                    if price >= bb_upper: bear_score += 3
         except: pass
 
+        # Verdict
         if bull_score > bear_score:
             bias = "BULLISH"
             action_rec = "🟢 เน้นฝั่ง BUY"
@@ -122,7 +126,7 @@ def analyze_dynamic(symbol: str, mode: str):
         if (price - buy_entry) > (atr * 5): buy_entry = price - atr
         if (sell_entry - price) > (atr * 5): sell_entry = price + atr
 
-        
+        # Setup
         buy_sl = buy_entry - (atr * sl_mult)
         buy_tp = buy_entry + (atr * tp_mult)
         sell_sl = sell_entry + (atr * sl_mult)
@@ -160,6 +164,7 @@ def analyze_custom(req: AnalysisRequest):
             f"--------------------\n"
             f"🎯 **แผนเทรด {data['symbol']}**\n"
             f"⚙️ ข้อมูล: {data['tf_name']}\n"
+            f"💰 **ราคาปัจจุบัน: ${data['price']}**\n"  # <--- [เพิ่มตรงนี้ครับ]
             f"📊 สถานะ: {data['trend']} (RSI: {data['rsi']})\n"
             f"--------------------\n"
             f"🟢 **BUY Limit**\n"
@@ -174,7 +179,7 @@ def analyze_custom(req: AnalysisRequest):
         )
         return {"reply": reply}
     else:
-        return {"reply": "❌ ขออภัยครับ ระบบไม่สามารถดึงข้อมูลได้จริงๆ (กรุณาลองกดใหม่)"}
+        return {"reply": "❌ ข้อมูลไม่พร้อมใช้งาน กรุณาลองใหม่"}
 
 @app.get("/analyze/{symbol}")
 def analyze_market(symbol: str):
