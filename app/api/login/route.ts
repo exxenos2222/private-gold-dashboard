@@ -16,10 +16,11 @@ export async function POST(req: NextRequest) {
     const expiresInStr = rememberMe ? "7d" : "1h"; 
     const maxAgeSeconds = rememberMe ? 7 * 24 * 60 * 60 : 3600; 
 
-    
     const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: expiresInStr });
 
-    cookies().set({
+    const cookieStore = await cookies();
+    
+    cookieStore.set({
       name: "token",
       value: token,
       httpOnly: true, 
@@ -27,6 +28,7 @@ export async function POST(req: NextRequest) {
       path: "/", 
       maxAge: maxAgeSeconds, 
     });
+    // ---------------------------------------
 
     return NextResponse.json({ success: true, token });
   } else {
