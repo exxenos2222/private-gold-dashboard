@@ -20,7 +20,7 @@ class AnalysisRequest(BaseModel):
     symbol: str
     mode: str 
 
-# --- ฟังก์ชันดึงราคา Real-time ---
+# --- Helper Functions ---
 def get_current_price(symbol):
     try:
         target = "XAUUSD=X" if "GC=F" in symbol or "GOLD" in symbol else symbol
@@ -30,7 +30,7 @@ def get_current_price(symbol):
     return None
 
 def get_data_safe(symbol, interval, period):
-    # Logic การดึงข้อมูลเดิม (Spot -> Futures -> Fallback)
+    # Spot -> Futures -> Fallback Logic (เหมือนเดิม)
     if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
         try:
             df = yf.Ticker("XAUUSD=X").history(period=period, interval=interval)
@@ -53,134 +53,157 @@ def get_data_safe(symbol, interval, period):
     except:
         return pd.DataFrame(), "Error"
 
-# --- [NEW] ฟังก์ชันหา Order Block (SMC) ---
-def find_order_blocks(df):
-    # หา Bullish OB (แท่งแดงสุดท้าย ก่อนเขียวใหญ่)
-    bullish_ob = None
-    bearish_ob = None
+# --- [NEW] ฟังก์ชันคำนวณ Fibonacci ---
+def get_fibonacci_levels(df):
+    # หาจุดสูงสุด/ต่ำสุด ในรอบ 50 แท่งล่าสุด
+    high_price = df['High'].tail(50).max()
+    low_price = df['Low'].tail(50).min()
+    diff = high_price - low_price
     
-    # วนลูปย้อนหลัง 20 แท่งล่าสุด
-    for i in range(len(df)-2, len(df)-20, -1):
-        curr = df.iloc[i]
-        next_candle = df.iloc[i+1]
-        body_size = abs(curr['Close'] - curr['Open'])
-        next_body = abs(next_candle['Close'] - next_candle['Open'])
-        avg_body = abs(df['Close'] - df['Open']).mean()
-
-        # Bullish OB Logic: แท่งแดง -> ตามด้วยเขียวพุ่งแรง (Engulfing)
-        if curr['Close'] < curr['Open']: # แท่งแดง
-            if next_candle['Close'] > next_candle['Open']: # แท่งถัดไปเขียว
-                if next_body > (avg_body * 1.5) and next_candle['Close'] > curr['Open']: 
-                    # เจอแล้ว! รายใหญ่เข้าซื้อตรงนี้
-                    bullish_ob = curr['High'] # ใช้ราคา High ของแท่ง OB เป็นจุดเข้า
-                    break
+    # ขาขึ้น (Retracement)
+    fibo_618_up = high_price - (diff * 0.618)
+    fibo_500_up = high_price - (diff * 0.5)
     
-    # Bearish OB Logic: แท่งเขียว -> ตามด้วยแดงทุบแรง
-    for i in range(len(df)-2, len(df)-20, -1):
-        curr = df.iloc[i]
-        next_candle = df.iloc[i+1]
-        body_size = abs(curr['Close'] - curr['Open'])
-        next_body = abs(next_candle['Close'] - next_candle['Open'])
-        avg_body = abs(df['Close'] - df['Open']).mean()
+    # ขาลง (Retracement)
+    fibo_618_down = low_price + (diff * 0.618)
+    fibo_500_down = low_price + (diff * 0.5)
+    
+    return {
+        "high": high_price, "low": low_price,
+        "buy_zone": [fibo_618_up, fibo_500_up], # โซนรอย่อซื้อ
+        "sell_zone": [fibo_618_down, fibo_500_down] # โซนรอเด้งขาย
+    }
 
-        if curr['Close'] > curr['Open']: # แท่งเขียว
-            if next_candle['Close'] < next_candle['Open']: # แท่งถัดไปแดง
-                if next_body > (avg_body * 1.5) and next_candle['Close'] < curr['Open']:
-                    # เจอแล้ว! รายใหญ่ทุบตรงนี้
-                    bearish_ob = curr['Low'] # ใช้ราคา Low ของแท่ง OB เป็นจุดเข้า
-                    break
-                    
-    return bullish_ob, bearish_ob
+# --- [NEW] ฟังก์ชันหาแท่งเทียนกลับตัว (Pattern) ---
+def check_candlestick_pattern(df):
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    
+    # Engulfing (กลืนกิน)
+    bullish_engulfing = (prev['Close'] < prev['Open']) and (last['Close'] > last['Open']) and (last['Close'] > prev['Open']) and (last['Open'] < prev['Close'])
+    bearish_engulfing = (prev['Close'] > prev['Open']) and (last['Close'] < last['Open']) and (last['Close'] < prev['Open']) and (last['Open'] > prev['Close'])
+    
+    # Hammer / Shooting Star (หางยาว)
+    body = abs(last['Close'] - last['Open'])
+    upper_wick = last['High'] - max(last['Close'], last['Open'])
+    lower_wick = min(last['Close'], last['Open']) - last['Low']
+    
+    hammer = lower_wick > (body * 2) and upper_wick < body # หางล่างยาว (ดันขึ้น)
+    shooting_star = upper_wick > (body * 2) and lower_wick < body # หางบนยาว (ตบลง)
+    
+    if bullish_engulfing: return "Bullish Engulfing (กลืนกินขาขึ้น)"
+    if bearish_engulfing: return "Bearish Engulfing (กลืนกินขาลง)"
+    if hammer: return "Hammer (แรงซื้อดันกลับ)"
+    if shooting_star: return "Shooting Star (แรงขายตบสวน)"
+    
+    return None
 
 def analyze_dynamic(symbol: str, mode: str):
     try:
         if mode == "scalping":
-            req_int = "15m"; req_per = "5d"; sl_mult = 0.6; tp_mult = 1.5; tf_name = "M15 (SMC Scalp)"
+            req_int = "15m"; req_per = "5d"; sl_mult = 0.6; tp_mult = 1.5; tf_name = "M15 (Sniper)"
         elif mode == "daytrade":
-            req_int = "60m"; req_per = "1mo"; sl_mult = 1.5; tp_mult = 2.0; tf_name = "H1 (SMC Day)"
+            req_int = "60m"; req_per = "1mo"; sl_mult = 1.5; tp_mult = 2.0; tf_name = "H1 (Day Trade)"
         else: 
-            req_int = "1d"; req_per = "1y"; sl_mult = 2.5; tp_mult = 3.5; tf_name = "D1 (SMC Swing)"
+            req_int = "1d"; req_per = "1y"; sl_mult = 2.5; tp_mult = 3.5; tf_name = "D1 (Swing)"
 
         df, actual_tf_label = get_data_safe(symbol, req_int, req_per)
-        if df.empty or len(df) < 10: return None 
+        if df.empty or len(df) < 20: return None 
 
         last = df.iloc[-1]
         raw_price = last['Close']
         
+        # Calibration
         real_price = get_current_price(symbol)
+        offset = 0
+        is_calibrated = False
         if real_price and abs(real_price - raw_price) > 0.5:
             price = real_price
             offset = real_price - raw_price
             is_calibrated = True
         else:
             price = raw_price
-            offset = 0
-            is_calibrated = False
         
-        atr = price * 0.005
-        rsi = 50
-        ema50 = price
-        
+        # Basic Indicators
+        atr = price * 0.005; rsi = 50; ema50 = price
         try: 
             df.ta.atr(length=14, append=True)
-            if pd.notna(df['ATRr_14'].iloc[-1]): atr = df['ATRr_14'].iloc[-1]
-            
             df.ta.rsi(length=14, append=True)
-            if pd.notna(df['RSI_14'].iloc[-1]): rsi = df['RSI_14'].iloc[-1]
-            
             df.ta.ema(length=50, append=True)
+            if pd.notna(df['ATRr_14'].iloc[-1]): atr = df['ATRr_14'].iloc[-1]
+            if pd.notna(df['RSI_14'].iloc[-1]): rsi = df['RSI_14'].iloc[-1]
             if pd.notna(df['EMA_50'].iloc[-1]): ema50 = df['EMA_50'].iloc[-1] + offset
         except: pass
 
-        # Scoring
+        # --- Scoring System ---
         bull_score = 0
         bear_score = 0
         reasons = []
 
-        if price > ema50: bull_score += 2; reasons.append("Trend ขาขึ้น")
-        else: bear_score += 2; reasons.append("Trend ขาลง")
+        # 1. Trend
+        if price > ema50: bull_score += 2
+        else: bear_score += 2
 
+        # 2. Fibonacci Logic (จุดเข้าคมๆ)
+        fibo = get_fibonacci_levels(df)
+        # ปรับ Offset ให้ Fibo
+        fibo_buy_zone = [x + offset for x in fibo['buy_zone']]
+        fibo_sell_zone = [x + offset for x in fibo['sell_zone']]
+
+        # 3. Candlestick Pattern (ตัวคอนเฟิร์ม)
+        pattern = check_candlestick_pattern(df)
+        if pattern:
+            reasons.append(f"Pattern: {pattern}")
+            if "Bullish" in pattern or "Hammer" in pattern: bull_score += 2
+            if "Bearish" in pattern or "Shooting" in pattern: bear_score += 2
+
+        # 4. RSI Logic
         if rsi < 30: bull_score += 1; reasons.append("RSI Oversold")
-        elif rsi > 70: bear_score += 1; reasons.append("RSI Overbought")
+        if rsi > 70: bear_score += 1; reasons.append("RSI Overbought")
 
-        # --- [SMC INTEGRATION] ใช้ Order Block เป็นจุดเข้าหลัก ---
-        ob_buy, ob_sell = find_order_blocks(df)
+        # --- Decision & Entry ---
         
-        # ปรับ Offset ให้ Order Block ด้วย
-        if ob_buy: ob_buy += offset
-        if ob_sell: ob_sell += offset
-
-        # คำนวณจุดเข้า (Prioritize SMC)
-        # ถ้าเจอ OB ให้ใช้ OB ถ้าไม่เจอให้ใช้ Logic เดิม (EMA/BB)
-        if ob_buy and price > ob_buy: 
-            buy_entry = ob_buy
-            bull_score += 2 # ให้คะแนนเพิ่มเพราะมีฐานแน่น
-            reasons.append("เจอ Bullish Order Block (แนวรับรายใหญ่)")
-        else:
-            buy_entry = price - (atr * 0.8) # Fallback
-
-        if ob_sell and price < ob_sell: 
-            sell_entry = ob_sell
-            bear_score += 2
-            reasons.append("เจอ Bearish Order Block (แนวต้านรายใหญ่)")
-        else:
-            sell_entry = price + (atr * 0.8) # Fallback
-
-        # Verdict
+        # ขาขึ้น: หาจังหวะย่อซื้อที่ Fibo 61.8%
         if bull_score > bear_score:
             bias = "BULLISH"
-            action_rec = "🟢 เน้นฝั่ง BUY (ตามรายใหญ่)"
+            action_rec = "🟢 เน้นฝั่ง BUY"
+            # Entry ที่ Fibo 61.8% ของชุดขาขึ้น
+            buy_entry = fibo_buy_zone[0] 
+            # ถ้า Fibo ไกลไป ให้ใช้ EMA50 ช่วย
+            if price - buy_entry > atr * 3: buy_entry = ema50
+            
+            # ถ้ากราฟเกิด Pattern กลับตัว ให้เข้าเลย!
+            if pattern and ("Bullish" in pattern or "Hammer" in pattern):
+                buy_entry = price
+                reasons.append("เข้าตาม Pattern กลับตัว")
+
+            sell_entry = price + (atr * 2) # ตั้งหลอกไว้ไกลๆ
+
+        # ขาลง: หาจังหวะเด้งขายที่ Fibo 61.8%
         elif bear_score > bull_score:
             bias = "BEARISH"
-            action_rec = "🔴 เน้นฝั่ง SELL (ตามรายใหญ่)"
+            action_rec = "🔴 เน้นฝั่ง SELL"
+            # Entry ที่ Fibo 61.8% ของชุดขาลง
+            sell_entry = fibo_sell_zone[0]
+            if sell_entry - price > atr * 3: sell_entry = ema50
+
+            if pattern and ("Bearish" in pattern or "Shooting" in pattern):
+                sell_entry = price
+                reasons.append("เข้าตาม Pattern กลับตัว")
+
+            buy_entry = price - (atr * 2)
+
         else:
             bias = "SIDEWAY"
             action_rec = "⚠️ รอเลือกทาง"
+            buy_entry = price - atr
+            sell_entry = price + atr
 
-        # Safety
-        if (price - buy_entry) > (atr * 5): buy_entry = price - atr
-        if (sell_entry - price) > (atr * 5): sell_entry = price + atr
+        # Safety Adjust
+        if buy_entry >= price: buy_entry = price - (atr * 0.2)
+        if sell_entry <= price: sell_entry = price + (atr * 0.2)
 
+        # Setup
         buy_sl = buy_entry - (atr * sl_mult)
         buy_tp = buy_entry + (atr * tp_mult)
         sell_sl = sell_entry + (atr * sl_mult)
@@ -199,7 +222,7 @@ def analyze_dynamic(symbol: str, mode: str):
             "tf_name": final_tf_name,
             "trend": bias,
             "action": action_rec,
-            "reasons": ", ".join(reasons[:2]),
+            "reasons": ", ".join(reasons[:3]), # เอาเหตุผลเด็ดๆ 3 ข้อ
             "rsi": round(rsi, 2),
             "score": f"{bull_score}-{bear_score}",
             "buy_setup": {"entry": round(buy_entry, 2), "sl": round(buy_sl, 2), "tp": round(buy_tp, 2), "pips": int((buy_entry - buy_sl) * pips_scale)},
@@ -207,7 +230,7 @@ def analyze_dynamic(symbol: str, mode: str):
         }
 
     except Exception as e:
-        print(f"CRITICAL ERROR: {e}")
+        print(f"Error: {e}")
         return None
 
 @app.post("/analyze_custom")
@@ -219,24 +242,25 @@ def analyze_custom(req: AnalysisRequest):
         reply = (
             f"🏆 **สรุป: {data['action']}**\n"
             f"--------------------\n"
-            f"🎯 **แผนเทรด {data['symbol']} (SMC)**\n"
+            f"🎯 **แผนเทรด {data['symbol']} (Sniper)**\n"
             f"⚙️ ข้อมูล: {data['tf_name']}\n"
             f"💰 **ราคา: ${data['price']}**\n"
-            f"📊 สถานะ: {data['trend']} | {data['reasons']}\n"
+            f"📊 สถานะ: {data['trend']} (RSI: {data['rsi']})\n"
+            f"💡 เหตุผล: {data['reasons']}\n"
             f"--------------------\n"
-            f"🟢 **BUY Limit (รอที่ OB)**\n"
+            f"🟢 **BUY Limit**\n"
             f"   • เข้า: {data['buy_setup']['entry']}\n"
             f"   • ⛔ SL: {data['buy_setup']['sl']} (~{data['buy_setup']['pips']} จุด)\n"
             f"   • ✅ TP: {data['buy_setup']['tp']}\n"
             f"--------------------\n"
-            f"🔴 **SELL Limit (รอที่ OB)**\n"
+            f"🔴 **SELL Limit**\n"
             f"   • เข้า: {data['sell_setup']['entry']}\n"
             f"   • ⛔ SL: {data['sell_setup']['sl']} (~{data['sell_setup']['pips']} จุด)\n"
             f"   • ✅ TP: {data['sell_setup']['tp']}"
         )
         return {"reply": reply}
     else:
-        return {"reply": "❌ ข้อมูลไม่พร้อมใช้งาน"}
+        return {"reply": "❌ ข้อมูลไม่พร้อมใช้งาน กรุณาลองใหม่"}
 
 @app.get("/analyze/{symbol}")
 def analyze_market(symbol: str):
