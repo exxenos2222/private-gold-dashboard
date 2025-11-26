@@ -19,42 +19,58 @@ class AnalysisRequest(BaseModel):
     symbol: str
     mode: str 
 
+# --- ฟังก์ชันดึงราคาปัจจุบัน (Real-time) ---
 def get_current_price(symbol):
     try:
+        # บังคับดู Spot Gold เท่านั้น
         target = "XAUUSD=X" if "GC=F" in symbol or "GOLD" in symbol else symbol
         df = yf.Ticker(target).history(period="1d", interval="1m")
         if not df.empty: return df['Close'].iloc[-1]
     except: pass
     return None
 
+# --- [แก้ใหม่] ฟังก์ชันดึงข้อมูลแบบ "Spot Only" (ไม่เอา Futures) ---
 def get_data_safe(symbol, interval, period):
-    # 1. ลองดึง Spot Gold ก่อน
+    
+    # กรณีเป็นทองคำ (Gold)
     if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
+        target = "XAUUSD=X" # Spot Gold
+        
+        # 1. พยายามดึงตามที่ขอ (เช่น M15)
         try:
-            df = yf.Ticker("XAUUSD=X").history(period=period, interval=interval)
+            df = yf.Ticker(target).history(period=period, interval=interval)
             if len(df) > 15: return df, f"{interval} (Spot)"
         except: pass
         
+        # 2. ถ้า M15 ไม่มา -> ลอง M30 Spot (ยังดีกว่าไปใช้ Futures)
+        if interval == "15m":
+            print("⚠️ Spot M15 failed, trying M30 Spot...")
+            try:
+                df = yf.Ticker(target).history(period="5d", interval="30m")
+                if len(df) > 15: return df, "M30 (Spot Backup)"
+            except: pass
+
+        # 3. ถ้าไม่ไหวจริง -> ใช้ H1 Spot (ชัวร์สุด)
+        print("⚠️ Spot Intraday failed, using H1 Spot...")
         try:
-            df = yf.Ticker("GC=F").history(period=period, interval=interval)
-            if len(df) > 15: return df, f"{interval} (Futures)"
+            df = yf.Ticker(target).history(period="1mo", interval="60m")
+            return df, "H1 (Spot Backup)"
         except: pass
 
-    # 2. กรณี Bitcoin หรืออื่นๆ
+    # กรณี Bitcoin หรืออื่นๆ
     else:
         try:
             df = yf.Ticker(symbol).history(period=period, interval=interval)
             if len(df) > 15: return df, interval
         except: pass
+        
+        # Fallback BTC
+        try:
+            df = yf.Ticker(symbol).history(period="1mo", interval="60m")
+            return df, "H1 (Backup)"
+        except: pass
 
-    # 3. Fallback H1
-    print("⚠️ Fetch failed, using fallback H1...")
-    try:
-        fallback_sym = "XAUUSD=X" if "GC=F" in symbol or "GOLD" in symbol else symbol
-        df = yf.Ticker(fallback_sym).history(period="1mo", interval="60m")
-        return df, "H1 (Backup Data)"
-    except:
-        return pd.DataFrame(), "Error"
+    return pd.DataFrame(), "Error"
 
 def analyze_dynamic(symbol: str, mode: str):
     try:
@@ -75,7 +91,7 @@ def analyze_dynamic(symbol: str, mode: str):
         last = df.iloc[-1]
         raw_price = last['Close']
         
-        # --- Auto-Calibration (จูนราคา) ---
+        # Auto-Calibration (จูนราคา Spot ให้ตรงเป๊ะ)
         real_price = get_current_price(symbol)
         offset = 0
         is_calibrated = False
@@ -95,14 +111,10 @@ def analyze_dynamic(symbol: str, mode: str):
         try: 
             df.ta.atr(length=14, append=True)
             if pd.notna(df['ATRr_14'].iloc[-1]): atr = df['ATRr_14'].iloc[-1]
-        except: pass
-
-        try:
+            
             df.ta.rsi(length=14, append=True)
             if pd.notna(df['RSI_14'].iloc[-1]): rsi = df['RSI_14'].iloc[-1]
-        except: pass
-
-        try:
+            
             df.ta.ema(length=50, append=True)
             if pd.notna(df['EMA_50'].iloc[-1]): ema50 = df['EMA_50'].iloc[-1] + offset
         except: pass
@@ -130,8 +142,8 @@ def analyze_dynamic(symbol: str, mode: str):
                 if pd.notna(bb_lower) and pd.notna(bb_upper):
                     buy_entry = bb_lower
                     sell_entry = bb_upper
-                    if price <= bb_lower: bull_score += 3
-                    if price >= bb_upper: bear_score += 3
+                    if price <= bb_lower: bull_score += 3; reasons.append("ชนขอบล่าง BB")
+                    if price >= bb_upper: bear_score += 3; reasons.append("ชนขอบบน BB")
         except: pass
 
         # Verdict
@@ -159,7 +171,7 @@ def analyze_dynamic(symbol: str, mode: str):
         if "BTC" in symbol: pips_scale = 1
 
         final_tf_name = actual_tf_label
-        if is_calibrated: final_tf_name += " ⚡(Live Price)"
+        if is_calibrated: final_tf_name += " ⚡(Live)"
 
         return {
             "symbol": symbol,
@@ -189,8 +201,9 @@ def analyze_custom(req: AnalysisRequest):
             f"--------------------\n"
             f"🎯 **แผนเทรด {data['symbol']}**\n"
             f"⚙️ ข้อมูล: {data['tf_name']}\n"
-            f"💰 **ราคาปัจจุบัน: ${data['price']}**\n"  # <--- [เพิ่มตรงนี้ครับ]
+            f"💰 **ราคาปัจจุบัน: ${data['price']}**\n"
             f"📊 สถานะ: {data['trend']} (RSI: {data['rsi']})\n"
+            f"💡 เหตุผล: {data['reasons']}\n"
             f"--------------------\n"
             f"🟢 **BUY Limit**\n"
             f"   • เข้า: {data['buy_setup']['entry']}\n"
