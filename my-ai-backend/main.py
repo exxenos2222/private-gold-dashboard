@@ -3,8 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import yfinance as yf
 import pandas as pd
-# ใช้ pandas_ta แบบเบา (ไม่เรียก scipy)
-import pandas_ta as ta 
+import pandas_ta as ta
+import requests # ใช้ยิงไปหา Binance
 
 app = FastAPI()
 
@@ -20,15 +20,37 @@ class AnalysisRequest(BaseModel):
     symbol: str
     mode: str 
 
-def get_current_price(symbol):
+# --- [ทีเด็ด] ฟังก์ชันดึงราคา Spot Gold จาก Binance (PAXG) ---
+def get_real_price(symbol):
     try:
-        target = "XAUUSD=X" if "GC=F" in symbol or "GOLD" in symbol else symbol
+        # 1. ถ้าเป็นทอง ให้ดึง PAXG/USDT (ราคาเท่า Spot Gold เป๊ะ)
+        if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
+            url = "https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT"
+            resp = requests.get(url, timeout=5)
+            data = resp.json()
+            return float(data['price'])
+            
+        # 2. ถ้าเป็น Bitcoin
+        elif "BTC" in symbol:
+            url = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
+            resp = requests.get(url, timeout=5)
+            data = resp.json()
+            return float(data['price'])
+            
+    except Exception as e:
+        print(f"Binance Price Error: {e}")
+        
+    # 3. ถ้า Binance ล่ม ให้กลับไปใช้ Yahoo (สำรอง)
+    try:
+        target = "XAUUSD=X" if "GOLD" in symbol else symbol
         df = yf.Ticker(target).history(period="1d", interval="1m")
         if not df.empty: return df['Close'].iloc[-1]
     except: pass
+    
     return None
 
 def get_data_safe(symbol, interval, period):
+    # พยายามดึง Spot ก่อน
     if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
         try:
             df = yf.Ticker("XAUUSD=X").history(period=period, interval=interval)
@@ -44,6 +66,7 @@ def get_data_safe(symbol, interval, period):
             if len(df) > 15: return df, interval
         except: pass
 
+    # Fallback
     try:
         fallback_sym = "XAUUSD=X" if "GC=F" in symbol or "GOLD" in symbol else symbol
         df = yf.Ticker(fallback_sym).history(period="1mo", interval="60m")
@@ -61,65 +84,69 @@ def analyze_dynamic(symbol: str, mode: str):
         else: 
             req_int = "1d"; req_per = "1y"; sl_mult = 2.5; tp_mult = 3.5; tf_name = "D1 (ถือยาว)"
 
+        # Get Data (จาก Yahoo เอามาทำกราฟ)
         df, actual_tf_label = get_data_safe(symbol, req_int, req_per)
         if df.empty or len(df) < 10: return None 
 
         last = df.iloc[-1]
         raw_price = last['Close']
         
-        real_price = get_current_price(symbol)
-        offset = 0
-        is_calibrated = False
-        if real_price and abs(real_price - raw_price) > 0.5:
-            price = real_price
-            offset = real_price - raw_price
-            is_calibrated = True
-        else:
-            price = raw_price
+        # --- [สำคัญ] ดึงราคาจริงจาก Binance ---
+        real_price = get_real_price(symbol)
         
-        # คำนวณแบบ Manual (ไม่พึ่ง pandas_ta ที่ใช้ scipy)
-        # ATR แบบบ้านๆ (High-Low)
-        try:
-            atr = (df['High'] - df['Low']).tail(14).mean()
-        except:
-            atr = price * 0.005
+        # คำนวณส่วนต่าง (Offset) เพื่อกดราคา Futures ให้เท่า Spot
+        offset = 0
+        price = raw_price
+        is_calibrated = False
+        
+        if real_price:
+            price = real_price # ใช้ราคา Binance เป็นหลัก
+            offset = real_price - raw_price # หาค่าส่วนต่าง (เช่น -35.5)
+            is_calibrated = True
+        
+        # Indicators
+        atr = price * 0.005; rsi = 50; ema50 = price
+        
+        try: 
+            df.ta.atr(length=14, append=True)
+            if pd.notna(df['ATRr_14'].iloc[-1]): atr = df['ATRr_14'].iloc[-1]
+            
+            df.ta.rsi(length=14, append=True)
+            if pd.notna(df['RSI_14'].iloc[-1]): rsi = df['RSI_14'].iloc[-1]
+            
+            df.ta.ema(length=50, append=True)
+            # จูน EMA ด้วย Offset
+            if pd.notna(df['EMA_50'].iloc[-1]): ema50 = df['EMA_50'].iloc[-1] + offset
+        except: pass
 
-        # RSI แบบบ้านๆ
-        try:
-            delta = df['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs)).iloc[-1]
-        except:
-            rsi = 50
-
-        # EMA แบบบ้านๆ
-        try:
-            ema50 = df['Close'].ewm(span=50, adjust=False).mean().iloc[-1] + offset
-        except:
-            ema50 = price
-
+        # Scoring
         bull_score = 0
         bear_score = 0
         reasons = []
 
-        # Trend
         if price > ema50: bull_score += 2; reasons.append("เหนือ EMA50")
         else: bear_score += 2; reasons.append("ใต้ EMA50")
 
-        # RSI
-        if rsi < 30: bull_score += 1; reasons.append("RSI Oversold")
-        if rsi > 70: bear_score += 1; reasons.append("RSI Overbought")
+        if rsi < 30: bull_score += 2; reasons.append("RSI Oversold")
+        elif rsi > 70: bear_score += 2; reasons.append("RSI Overbought")
 
-        # Entry Logic (Simple but Effective)
-        # ขาขึ้น: รอย่อที่ EMA หรือราคา - ATR
-        buy_entry = ema50 if price > ema50 else (price - atr)
-        if (price - buy_entry) > (atr * 3): buy_entry = price - (atr * 0.5)
-
-        # ขาลง: รอเด้งที่ EMA หรือราคา + ATR
-        sell_entry = ema50 if price < ema50 else (price + atr)
-        if (sell_entry - price) > (atr * 3): sell_entry = price + (atr * 0.5)
+        # Entry Logic (จูนทุกจุดด้วย Offset)
+        buy_entry = price - atr
+        sell_entry = price + atr
+        
+        try:
+            df.ta.bbands(length=20, std=2, append=True)
+            if 'BBL_20_2.0' in df.columns:
+                # จูน BB ด้วย Offset
+                bb_lower = df['BBL_20_2.0'].iloc[-1] + offset
+                bb_upper = df['BBU_20_2.0'].iloc[-1] + offset
+                
+                if pd.notna(bb_lower):
+                    buy_entry = bb_lower
+                    sell_entry = bb_upper
+                    if price <= bb_lower: bull_score += 3; reasons.append("ชนขอบล่าง BB")
+                    if price >= bb_upper: bear_score += 3; reasons.append("ชนขอบบน BB")
+        except: pass
 
         # Verdict
         if bull_score > bear_score:
@@ -132,7 +159,13 @@ def analyze_dynamic(symbol: str, mode: str):
             bias = "SIDEWAY"
             action_rec = "⚠️ รอเลือกทาง"
 
-        # Setup
+        # Safety
+        if (price - buy_entry) > (atr * 5): buy_entry = price - atr
+        if (sell_entry - price) > (atr * 5): sell_entry = price + atr
+        
+        if buy_entry >= price: buy_entry = price - (atr * 0.2)
+        if sell_entry <= price: sell_entry = price + (atr * 0.2)
+
         buy_sl = buy_entry - (atr * sl_mult)
         buy_tp = buy_entry + (atr * tp_mult)
         sell_sl = sell_entry + (atr * sl_mult)
@@ -143,7 +176,7 @@ def analyze_dynamic(symbol: str, mode: str):
         if "BTC" in symbol: pips_scale = 1
 
         final_tf_name = actual_tf_label
-        if is_calibrated: final_tf_name += " ⚡(Live)"
+        if is_calibrated: final_tf_name += " ⚡(Real-time)"
 
         return {
             "symbol": symbol,
@@ -151,7 +184,7 @@ def analyze_dynamic(symbol: str, mode: str):
             "tf_name": final_tf_name,
             "trend": bias,
             "action": action_rec,
-            "reasons": ", ".join(reasons[:2]),
+            "reasons": ", ".join(reasons[:3]),
             "rsi": round(rsi, 2),
             "score": f"{bull_score}-{bear_score}",
             "buy_setup": {"entry": round(buy_entry, 2), "sl": round(buy_sl, 2), "tp": round(buy_tp, 2), "pips": int((buy_entry - buy_sl) * pips_scale)},
@@ -173,7 +206,7 @@ def analyze_custom(req: AnalysisRequest):
             f"--------------------\n"
             f"🎯 **แผนเทรด {data['symbol']}**\n"
             f"⚙️ ข้อมูล: {data['tf_name']}\n"
-            f"💰 **ราคาปัจจุบัน: ${data['price']}**\n"
+            f"💰 **ราคา: ${data['price']}**\n"
             f"📊 สถานะ: {data['trend']} (RSI: {data['rsi']})\n"
             f"--------------------\n"
             f"🟢 **BUY Limit**\n"

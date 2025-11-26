@@ -46,7 +46,6 @@ export default function MarketPage() {
     const ALL_ORIGINS_GET = 'https://api.allorigins.win/get?url='
     const todayStr = new Date().toISOString().slice(0, 10); 
 
-    // --- Logic Functions ---
     const generateMockData = useCallback(() => {
         const mockWatchlist = [
             { symbol: 'BINANCE:BTCUSDT', price: (Math.random() * (70000 - 60000) + 60000).toFixed(0), change: (Math.random() * 1000 - 500).toFixed(0), signal: Math.random() > 0.7 ? 'Sell' : Math.random() < 0.3 ? 'Buy' : 'Hold' },
