@@ -4,14 +4,14 @@
 import { useEffect, useState, useCallback } from 'react'
 import { FaChartLine, FaRegNewspaper, FaSyncAlt, FaTimes, FaArrowUp, FaArrowDown, FaExclamationTriangle } from 'react-icons/fa';
 import { MdOutlineDateRange, MdAccessTime } from 'react-icons/md';
-import ChatPanel from '../components/ChatPanel'; 
+import ChatPanel from '../components/ChatPanel';
 
 const ChartButton = ({ symbol, currentSymbol, onClick, label }) => (
     <button
         onClick={() => onClick(symbol)}
         className={`px-3 py-1 rounded-lg text-sm font-bold transition-all duration-200 
-            ${currentSymbol === symbol 
-                ? "bg-yellow-500 text-zinc-900 shadow-md shadow-yellow-500/50" 
+            ${currentSymbol === symbol
+                ? "bg-yellow-500 text-zinc-900 shadow-md shadow-yellow-500/50"
                 : "bg-zinc-700 text-gray-300 hover:bg-zinc-600"
             }`}
     >
@@ -40,11 +40,11 @@ export default function MarketPage() {
     const [mainTicker, setMainTicker] = useState({ price: 'Loading...', change: 0, percent: 0 });
     const [watchlist, setWatchlist] = useState([]);
     const [countdown, setCountdown] = useState({ minutes: 0, time: '' });
-    const [aiData, setAiData] = useState(null); 
+    const [aiData, setAiData] = useState(null);
 
     const FF_JSON = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json'
     const ALL_ORIGINS_GET = 'https://api.allorigins.win/get?url='
-    const todayStr = new Date().toISOString().slice(0, 10); 
+    const todayStr = new Date().toISOString().slice(0, 10);
 
     const generateMockData = useCallback(() => {
         const mockWatchlist = [
@@ -74,7 +74,7 @@ export default function MarketPage() {
             setCountdown({ minutes: -1, time: 'N/A' });
         }
     }, [todayStr]);
-    
+
     const normalizeEventDateToYYYYMMDD = (rawDate) => {
         if (!rawDate) return null;
         if (/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) return rawDate;
@@ -83,7 +83,7 @@ export default function MarketPage() {
             const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
             const monIndex = monthNames.indexOf(m[1]);
             if (monIndex !== -1) {
-                const currentYear = new Date().getFullYear(); 
+                const currentYear = new Date().getFullYear();
                 return `${currentYear}-${String(monIndex + 1).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`;
             }
         }
@@ -105,11 +105,11 @@ export default function MarketPage() {
             if (currentFilter !== "all") todayEvents = todayEvents.filter(ev => (ev.impact || "").toLowerCase() === currentFilter.toLowerCase())
             setNews(todayEvents.sort((a, b) => (a.time < b.time ? -1 : 1)))
         } catch (err) {
-            console.error("Fetch News Error:", err); 
+            console.error("Fetch News Error:", err);
             // ไม่ต้อง Set Error ให้หน้าเว็บพัง แค่ Log บอก
         } finally { setLoading(false) }
     }, [checkNextHighImpactNews, todayStr, filter]);
-    
+
     const loadChart = useCallback((symbol) => {
         const container = document.getElementById("tradingview_chart")
         if (!container) return
@@ -117,9 +117,9 @@ export default function MarketPage() {
         if (window.TradingView && window.TradingView.widget) {
             new window.TradingView.widget({
                 width: "100%",
-                height: 950, 
+                height: 950,
                 symbol,
-                interval: "5", 
+                interval: "5",
                 timezone: "Asia/Bangkok",
                 theme: "dark",
                 style: "1",
@@ -127,15 +127,15 @@ export default function MarketPage() {
                 container_id: "tradingview_chart",
                 enable_publishing: false,
                 withdateranges: true,
-                drawings_access: { type: 'black', tools: [ { name: "FibRetracement", type: "drawing" }, { name: "Rectangle", type: "drawing" } ] },
-                left_toolbar: true, 
-                studies: [ { id: "MASimple@tv-basicstudies", type: "EMA", inputs: { length: 50 } }, { id: "RSI@tv-basicstudies", type: "RSI", inputs: { length: 14 } } ],
+                drawings_access: { type: 'black', tools: [{ name: "FibRetracement", type: "drawing" }, { name: "Rectangle", type: "drawing" }] },
+                left_toolbar: true,
+                studies: [{ id: "MASimple@tv-basicstudies", type: "EMA", inputs: { length: 50 } }, { id: "RSI@tv-basicstudies", type: "RSI", inputs: { length: 14 } }],
             })
         }
-    }, []) 
+    }, [])
 
     const switchChart = (symbol) => setCurrentSymbol(symbol)
-    
+
     // --- useEffects ---
     useEffect(() => { const intervalId = setInterval(generateMockData, 5000); return () => clearInterval(intervalId); }, [generateMockData]);
     useEffect(() => {
@@ -149,7 +149,7 @@ export default function MarketPage() {
             } catch (err) { console.log("AI Backend not connected"); }
         };
         fetchAI();
-        const aiInterval = setInterval(fetchAI, 15000); 
+        const aiInterval = setInterval(fetchAI, 5000);
         return () => clearInterval(aiInterval);
     }, []);
     useEffect(() => {
@@ -159,15 +159,15 @@ export default function MarketPage() {
         document.body.appendChild(script)
         script.onload = () => setTimeout(() => loadChart(currentSymbol), 500);
         return () => document.body.removeChild(script);
-    }, [loadChart, currentSymbol]) 
+    }, [loadChart, currentSymbol])
     useEffect(() => {
         const timerId = setInterval(() => {
             if (countdown.minutes > 0) setCountdown(prev => ({ ...prev, minutes: prev.minutes - 1 }));
             if (countdown.minutes === 0) fetchNews();
-        }, 60000); 
+        }, 60000);
         return () => clearInterval(timerId);
-    }, [countdown.minutes, fetchNews]); 
-    useEffect(() => { fetchNews(); }, [fetchNews]); 
+    }, [countdown.minutes, fetchNews]);
+    useEffect(() => { fetchNews(); }, [fetchNews]);
 
     // --- Components ---
     const TickerBar = () => {
@@ -191,7 +191,7 @@ export default function MarketPage() {
     return (
         <main className="min-h-screen w-full pb-16 text-white bg-zinc-900 font-sans overflow-x-hidden">
             <TickerBar />
-            
+
             <div className="max-w-[1920px] mx-auto px-4 pt-6">
                 <header className="flex flex-col sm:flex-row items-center justify-between mb-6">
                     <div className="flex items-center gap-3 mb-4 sm:mb-0">
@@ -205,7 +205,7 @@ export default function MarketPage() {
                 </header>
 
                 <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 items-start">
-                    
+
                     <div className="xl:col-span-3 flex flex-col gap-6">
                         <section className="bg-zinc-800/80 backdrop-blur-sm rounded-xl shadow-2xl p-4 border border-zinc-700">
                             <div className="flex items-center justify-between mb-2">

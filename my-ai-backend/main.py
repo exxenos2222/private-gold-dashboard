@@ -76,13 +76,25 @@ def get_data_safe(symbol, interval, period):
 
 def analyze_dynamic(symbol: str, mode: str):
     try:
-        # Config
+        # Config & Strategy Selection
         if mode == "scalping":
-            req_int = "15m"; req_per = "5d"; sl_mult = 0.6; tp_mult = 1.2; tf_name = "M15 (ซิ่ง)"
+            # Scalping: M15, Trend Following
+            req_int = "15m"; req_per = "5d"
+            sl_mult = 0.8; tp_mult = 1.5 
+            tf_name = "M15 (Scalping)"
+            strategy = "trend_follow"
         elif mode == "daytrade":
-            req_int = "60m"; req_per = "1mo"; sl_mult = 1.5; tp_mult = 2.0; tf_name = "H1 (จบในวัน)"
+            # Daytrade: H1, Pullback/Breakout
+            req_int = "60m"; req_per = "1mo"
+            sl_mult = 1.2; tp_mult = 2.5
+            tf_name = "H1 (Daytrade)"
+            strategy = "pullback"
         else: 
-            req_int = "1d"; req_per = "1y"; sl_mult = 2.5; tp_mult = 3.5; tf_name = "D1 (ถือยาว)"
+            # Swing: D1, Mean Reversion/Trend
+            req_int = "1d"; req_per = "1y"
+            sl_mult = 2.0; tp_mult = 4.0
+            tf_name = "D1 (Swing)"
+            strategy = "mean_reversion"
 
         # Get Data (จาก Yahoo เอามาทำกราฟ)
         df, actual_tf_label = get_data_safe(symbol, req_int, req_per)
@@ -101,11 +113,11 @@ def analyze_dynamic(symbol: str, mode: str):
         
         if real_price:
             price = real_price # ใช้ราคา Binance เป็นหลัก
-            offset = real_price - raw_price # หาค่าส่วนต่าง (เช่น -35.5)
+            offset = real_price - raw_price # หาค่าส่วนต่าง
             is_calibrated = True
         
-        # Indicators
-        atr = price * 0.005; rsi = 50; ema50 = price
+        # Indicators Calculation
+        atr = price * 0.005; rsi = 50; ema50 = price; ema200 = price
         
         try: 
             df.ta.atr(length=14, append=True)
@@ -115,38 +127,32 @@ def analyze_dynamic(symbol: str, mode: str):
             if pd.notna(df['RSI_14'].iloc[-1]): rsi = df['RSI_14'].iloc[-1]
             
             df.ta.ema(length=50, append=True)
-            # จูน EMA ด้วย Offset
             if pd.notna(df['EMA_50'].iloc[-1]): ema50 = df['EMA_50'].iloc[-1] + offset
+
+            df.ta.ema(length=200, append=True)
+            if pd.notna(df['EMA_200'].iloc[-1]): ema200 = df['EMA_200'].iloc[-1] + offset
+            
+            df.ta.bbands(length=20, std=2, append=True)
+            bb_lower = df['BBL_20_2.0'].iloc[-1] + offset if 'BBL_20_2.0' in df.columns else price - atr
+            bb_upper = df['BBU_20_2.0'].iloc[-1] + offset if 'BBU_20_2.0' in df.columns else price + atr
+            bb_mid = df['BBM_20_2.0'].iloc[-1] + offset if 'BBM_20_2.0' in df.columns else price
         except: pass
 
-        # Scoring
+        # Trend Determination
         bull_score = 0
         bear_score = 0
         reasons = []
 
-        if price > ema50: bull_score += 2; reasons.append("เหนือ EMA50")
-        else: bear_score += 2; reasons.append("ใต้ EMA50")
+        # 1. EMA Trend
+        if price > ema50: bull_score += 2; reasons.append("Price > EMA50")
+        else: bear_score += 2; reasons.append("Price < EMA50")
 
+        # 2. RSI Momentum
+        if rsi > 55: bull_score += 1
+        elif rsi < 45: bear_score += 1
+        
         if rsi < 30: bull_score += 2; reasons.append("RSI Oversold")
         elif rsi > 70: bear_score += 2; reasons.append("RSI Overbought")
-
-        # Entry Logic (จูนทุกจุดด้วย Offset)
-        buy_entry = price - atr
-        sell_entry = price + atr
-        
-        try:
-            df.ta.bbands(length=20, std=2, append=True)
-            if 'BBL_20_2.0' in df.columns:
-                # จูน BB ด้วย Offset
-                bb_lower = df['BBL_20_2.0'].iloc[-1] + offset
-                bb_upper = df['BBU_20_2.0'].iloc[-1] + offset
-                
-                if pd.notna(bb_lower):
-                    buy_entry = bb_lower
-                    sell_entry = bb_upper
-                    if price <= bb_lower: bull_score += 3; reasons.append("ชนขอบล่าง BB")
-                    if price >= bb_upper: bear_score += 3; reasons.append("ชนขอบบน BB")
-        except: pass
 
         # Verdict
         if bull_score > bear_score:
@@ -159,13 +165,49 @@ def analyze_dynamic(symbol: str, mode: str):
             bias = "SIDEWAY"
             action_rec = "⚠️ รอเลือกทาง"
 
-        # Safety
-        if (price - buy_entry) > (atr * 5): buy_entry = price - atr
-        if (sell_entry - price) > (atr * 5): sell_entry = price + atr
-        
-        if buy_entry >= price: buy_entry = price - (atr * 0.2)
-        if sell_entry <= price: sell_entry = price + (atr * 0.2)
+        # Entry Logic based on Strategy
+        buy_entry = price
+        sell_entry = price
 
+        if strategy == "trend_follow": # Scalping
+            # เข้าตามเทรนด์ ย่อซื้อ เด้งขาย แต่เอาใกล้ๆ
+            if bias == "BULLISH":
+                buy_entry = price - (atr * 0.2) # ย่อนิดเดียวเข้าเลย
+                sell_entry = bb_upper # สวนเทรนด์ต้องรอขอบบน
+            elif bias == "BEARISH":
+                sell_entry = price + (atr * 0.2)
+                buy_entry = bb_lower
+            else: # Sideway
+                buy_entry = bb_lower
+                sell_entry = bb_upper
+
+        elif strategy == "pullback": # Daytrade
+            # รอราคาย่อมาที่ EMA หรือ BB Middle
+            if bias == "BULLISH":
+                buy_entry = max(ema50, bb_mid) # รับของที่เส้นค่าเฉลี่ย
+                sell_entry = bb_upper
+            elif bias == "BEARISH":
+                sell_entry = min(ema50, bb_mid)
+                buy_entry = bb_lower
+            else:
+                buy_entry = bb_lower
+                sell_entry = bb_upper
+
+        elif strategy == "mean_reversion": # Swing
+            # เน้นขอบ BB เท่านั้น
+            buy_entry = bb_lower
+            sell_entry = bb_upper
+
+        # Safety & Validation
+        # อย่าให้จุดเข้าไกลเกินไปจนไม่ได้ของ หรือใกล้เกินไปจนเสี่ยง
+        if (price - buy_entry) > (atr * 3): buy_entry = price - atr # ถ้าคำนวณแล้วไกลไป เอาแค่ ATR พอ
+        if (sell_entry - price) > (atr * 3): sell_entry = price + atr
+
+        # Ensure Entry is logical relative to current price (Limit Orders)
+        if buy_entry >= price: buy_entry = price - (atr * 0.1) # ถ้าคำนวณแล้วสูงกว่าราคาปัจจุบัน ให้รอซื้อต่ำกว่านิดนึง
+        if sell_entry <= price: sell_entry = price + (atr * 0.1)
+
+        # Calculate TP/SL
         buy_sl = buy_entry - (atr * sl_mult)
         buy_tp = buy_entry + (atr * tp_mult)
         sell_sl = sell_entry + (atr * sl_mult)
