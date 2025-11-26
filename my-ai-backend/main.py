@@ -43,40 +43,6 @@ def get_real_price(symbol):
     # 3. ถ้า Binance ล่ม ให้กลับไปใช้ Yahoo (สำรอง)
     try:
         target = "XAUUSD=X" if "GOLD" in symbol else symbol
-        df = yf.Ticker(target).history(period="1d", interval="1m")
-        if not df.empty: return df['Close'].iloc[-1]
-    except: pass
-    
-    return None
-
-def get_data_safe(symbol, interval, period):
-    # พยายามดึง Spot ก่อน
-    if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
-        try:
-            df = yf.Ticker("XAUUSD=X").history(period=period, interval=interval)
-            if len(df) > 15: return df, f"{interval} (Spot)"
-        except: pass
-        try:
-            df = yf.Ticker("GC=F").history(period=period, interval=interval)
-            if len(df) > 15: return df, f"{interval} (Futures)"
-        except: pass
-    else:
-        try:
-            df = yf.Ticker(symbol).history(period=period, interval=interval)
-            if len(df) > 15: return df, interval
-        except: pass
-
-    # Fallback
-    try:
-        fallback_sym = "XAUUSD=X" if "GC=F" in symbol or "GOLD" in symbol else symbol
-        df = yf.Ticker(fallback_sym).history(period="1mo", interval="60m")
-        return df, "H1 (Backup)"
-    except:
-        return pd.DataFrame(), "Error"
-
-def analyze_dynamic(symbol: str, mode: str):
-    try:
-        # Config & Strategy Selection
         if mode == "scalping":
             # Scalping: M15, Trend Following
             req_int = "15m"; req_per = "5d"
