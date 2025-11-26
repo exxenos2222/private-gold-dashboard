@@ -4,7 +4,7 @@ from pydantic import BaseModel
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
-import requests # ใช้ยิงไปหา Binance
+import requests
 
 app = FastAPI()
 
@@ -20,17 +20,17 @@ class AnalysisRequest(BaseModel):
     symbol: str
     mode: str 
 
-# --- [ทีเด็ด] ฟังก์ชันดึงราคา Spot Gold จาก Binance (PAXG) ---
+# --- 1. Get Real-time Price (Spot) ---
 def get_real_price(symbol):
     try:
-        # 1. ถ้าเป็นทอง ให้ดึง PAXG/USDT (ราคาเท่า Spot Gold เป๊ะ)
+        # Gold: Use PAXG/USDT from Binance (Spot Price)
         if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
             url = "https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT"
             resp = requests.get(url, timeout=5)
             data = resp.json()
             return float(data['price'])
             
-        # 2. ถ้าเป็น Bitcoin
+        # Bitcoin: Use BTC/USDT from Binance
         elif "BTC" in symbol:
             url = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
             resp = requests.get(url, timeout=5)
@@ -40,9 +40,34 @@ def get_real_price(symbol):
     except Exception as e:
         print(f"Binance Price Error: {e}")
         
-    # 3. ถ้า Binance ล่ม ให้กลับไปใช้ Yahoo (สำรอง)
+    return None
+
+# --- 2. Get Historical Data (Chart Shape) ---
+def get_data_safe(symbol, interval, period):
+    # For Gold, prioritize Futures (GC=F) for chart shape as XAUUSD=X is unreliable
+    if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
+        try:
+            df = yf.Ticker("GC=F").history(period=period, interval=interval)
+            if len(df) > 15: return df, f"{interval} (Futures)"
+        except: pass
+    else:
+        try:
+            df = yf.Ticker(symbol).history(period=period, interval=interval)
+            if len(df) > 15: return df, interval
+        except: pass
+
+    # Fallback
     try:
-        target = "XAUUSD=X" if "GOLD" in symbol else symbol
+        fallback_sym = "GC=F" if "GC=F" in symbol or "GOLD" in symbol else symbol
+        df = yf.Ticker(fallback_sym).history(period="1mo", interval="60m")
+        return df, "H1 (Backup)"
+    except:
+        return pd.DataFrame(), "Error"
+
+# --- 3. Analyze Logic ---
+def analyze_dynamic(symbol: str, mode: str):
+    try:
+        # Config & Strategy Selection
         if mode == "scalping":
             # Scalping: M15, Trend Following
             req_int = "15m"; req_per = "5d"
@@ -62,27 +87,25 @@ def get_real_price(symbol):
             tf_name = "D1 (Swing)"
             strategy = "mean_reversion"
 
-        # Get Data (จาก Yahoo เอามาทำกราฟ)
+        # Get Data
         df, actual_tf_label = get_data_safe(symbol, req_int, req_per)
         if df.empty or len(df) < 10: return None 
 
         last = df.iloc[-1]
         raw_price = last['Close']
         
-        # --- [สำคัญ] ดึงราคาจริงจาก Binance ---
+        # Get Real Price & Calculate Offset
         real_price = get_real_price(symbol)
-        
-        # คำนวณส่วนต่าง (Offset) เพื่อกดราคา Futures ให้เท่า Spot
         offset = 0
         price = raw_price
         is_calibrated = False
         
         if real_price:
-            price = real_price # ใช้ราคา Binance เป็นหลัก
-            offset = real_price - raw_price # หาค่าส่วนต่าง
+            price = real_price
+            offset = real_price - raw_price
             is_calibrated = True
         
-        # Indicators Calculation
+        # Indicators Calculation (Apply Offset)
         atr = price * 0.005; rsi = 50; ema50 = price; ema200 = price
         
         try: 
@@ -131,26 +154,24 @@ def get_real_price(symbol):
             bias = "SIDEWAY"
             action_rec = "⚠️ รอเลือกทาง"
 
-        # Entry Logic based on Strategy
+        # Entry Logic
         buy_entry = price
         sell_entry = price
 
         if strategy == "trend_follow": # Scalping
-            # เข้าตามเทรนด์ ย่อซื้อ เด้งขาย แต่เอาใกล้ๆ
             if bias == "BULLISH":
-                buy_entry = price - (atr * 0.2) # ย่อนิดเดียวเข้าเลย
-                sell_entry = bb_upper # สวนเทรนด์ต้องรอขอบบน
+                buy_entry = price - (atr * 0.2)
+                sell_entry = bb_upper
             elif bias == "BEARISH":
                 sell_entry = price + (atr * 0.2)
                 buy_entry = bb_lower
-            else: # Sideway
+            else:
                 buy_entry = bb_lower
                 sell_entry = bb_upper
 
         elif strategy == "pullback": # Daytrade
-            # รอราคาย่อมาที่ EMA หรือ BB Middle
             if bias == "BULLISH":
-                buy_entry = max(ema50, bb_mid) # รับของที่เส้นค่าเฉลี่ย
+                buy_entry = max(ema50, bb_mid)
                 sell_entry = bb_upper
             elif bias == "BEARISH":
                 sell_entry = min(ema50, bb_mid)
@@ -160,20 +181,17 @@ def get_real_price(symbol):
                 sell_entry = bb_upper
 
         elif strategy == "mean_reversion": # Swing
-            # เน้นขอบ BB เท่านั้น
             buy_entry = bb_lower
             sell_entry = bb_upper
 
-        # Safety & Validation
-        # อย่าให้จุดเข้าไกลเกินไปจนไม่ได้ของ หรือใกล้เกินไปจนเสี่ยง
-        if (price - buy_entry) > (atr * 3): buy_entry = price - atr # ถ้าคำนวณแล้วไกลไป เอาแค่ ATR พอ
+        # Safety
+        if (price - buy_entry) > (atr * 3): buy_entry = price - atr
         if (sell_entry - price) > (atr * 3): sell_entry = price + atr
 
-        # Ensure Entry is logical relative to current price (Limit Orders)
-        if buy_entry >= price: buy_entry = price - (atr * 0.1) # ถ้าคำนวณแล้วสูงกว่าราคาปัจจุบัน ให้รอซื้อต่ำกว่านิดนึง
+        if buy_entry >= price: buy_entry = price - (atr * 0.1)
         if sell_entry <= price: sell_entry = price + (atr * 0.1)
 
-        # Calculate TP/SL
+        # TP/SL
         buy_sl = buy_entry - (atr * sl_mult)
         buy_tp = buy_entry + (atr * tp_mult)
         sell_sl = sell_entry + (atr * sl_mult)
@@ -234,13 +252,21 @@ def analyze_custom(req: AnalysisRequest):
 @app.get("/analyze/{symbol}")
 def analyze_market(symbol: str):
     try:
-        target = "XAUUSD=X" if "GC=F" in symbol or "GOLD" in symbol else symbol
+        # Use GC=F for basic price check if XAU is requested, but prioritize Real Price logic if possible
+        # For simple ticker, just get GC=F
+        target = "GC=F" if "GC=F" in symbol or "GOLD" in symbol else symbol
         ticker = yf.Ticker(target)
         data = ticker.history(period="2d", interval="1h")
+        
+        # Try to get real price for display
+        real_price = get_real_price(symbol)
+        
         if data.empty: return {"symbol": symbol, "price": 0, "change":0, "percent":0}
-        price = data['Close'].iloc[-1]
+        
+        price = real_price if real_price else data['Close'].iloc[-1]
         prev = data['Close'].iloc[0]
         change = price - prev
         percent = (change / prev) * 100
+        
         return {"symbol": symbol, "price": round(price, 2), "change": round(change, 2), "percent": round(percent, 2)}
     except: return {"symbol": symbol, "price": 0}
