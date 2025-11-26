@@ -113,10 +113,10 @@ def analyze_dynamic(symbol: str, mode: str):
         if real_price and abs(real_price - price) > 0.5:
             offset = real_price - price
             price = real_price
-            ema50 += offset # Adjust EMA too
+            ema50 += offset 
             is_calibrated = True
 
-        # Scoring
+        
         bull_score = 0
         bear_score = 0
         reasons = []
@@ -130,7 +130,6 @@ def analyze_dynamic(symbol: str, mode: str):
         buy_entry = price - atr
         sell_entry = price + atr
         
-        # BB Strategy
         try:
             df.ta.bbands(length=20, std=2, append=True)
             if 'BBL_20_2.0' in df.columns:
@@ -154,11 +153,9 @@ def analyze_dynamic(symbol: str, mode: str):
             bias = "SIDEWAY"
             action_rec = "⚠️ รอเลือกทาง"
 
-        # Safety
         if (price - buy_entry) > (atr * 5): buy_entry = price - atr
         if (sell_entry - price) > (atr * 5): sell_entry = price + atr
 
-        # Setup
         buy_sl = buy_entry - (atr * sl_mult)
         buy_tp = buy_entry + (atr * tp_mult)
         sell_sl = sell_entry + (atr * sl_mult)
