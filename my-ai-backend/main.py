@@ -204,22 +204,37 @@ def analyze_dynamic(symbol: str, mode: str):
 
         elif strategy == "pullback":
             if bias == "BULLISH":
-                buy_entry = max(ema50, bb_mid)
-                if bullish_ob and abs(bullish_ob - price) < (atr * 3): buy_entry = bullish_ob
+                if bullish_ob and abs(bullish_ob - price) < (atr * 3):
+                    buy_entry = bullish_ob
+                elif price > ema50:
+                    buy_entry = ema50
+                else:
+                    buy_entry = bb_mid
+                
                 sell_entry = bb_upper
+
             elif bias == "BEARISH":
-                sell_entry = min(ema50, bb_mid)
-                if bearish_ob and abs(bearish_ob - price) < (atr * 3): sell_entry = bearish_ob
+                if bearish_ob and abs(bearish_ob - price) < (atr * 3):
+                    sell_entry = bearish_ob
+                elif price < ema50:
+                    sell_entry = ema50
+                else:
+                    sell_entry = bb_mid
+                
                 buy_entry = bb_lower
+
             else:
                 buy_entry = bb_lower
                 sell_entry = bb_upper
 
         elif strategy == "mean_reversion":
             buy_entry = bb_lower
-            if bullish_ob: buy_entry = bullish_ob
+            if bullish_ob and abs(bullish_ob - bb_lower) < atr:
+                buy_entry = bullish_ob
+            
             sell_entry = bb_upper
-            if bearish_ob: sell_entry = bearish_ob
+            if bearish_ob and abs(bearish_ob - bb_upper) < atr:
+                sell_entry = bearish_ob
 
         if (price - buy_entry) > (atr * 3): buy_entry = price - atr
         if (sell_entry - price) > (atr * 3): sell_entry = price + atr
@@ -273,22 +288,22 @@ def analyze_dynamic(symbol: str, mode: str):
 
         elif strategy == "pullback":
             if bias == "BULLISH":
-                reasoning_text = f"แนวโน้มขาขึ้น รอราคาย่อตัว "
-                if bullish_ob: reasoning_text += f"มาที่โซน Order Block ({round(bullish_ob, 2)}) "
-                else: reasoning_text += f"มาที่แนวรับ EMA50 ({round(buy_entry, 2)}) "
-                reasoning_text += "แล้วเข้าซื้อเพื่อความได้เปรียบ"
+                reasoning_text = f"แนวโน้มขาขึ้น (Daytrade) "
+                if buy_entry == bullish_ob: reasoning_text += f"รอเข้าที่ Order Block ({round(buy_entry, 2)}) "
+                elif buy_entry == ema50: reasoning_text += f"รอราคาย่อมาที่ EMA50 ({round(buy_entry, 2)}) "
+                else: reasoning_text += f"รอราคาย่อมาที่เส้นกลาง BB ({round(buy_entry, 2)}) "
             elif bias == "BEARISH":
-                reasoning_text = f"แนวโน้มขาลง รอราคาดีดตัว "
-                if bearish_ob: reasoning_text += f"ไปที่โซน Order Block ({round(bearish_ob, 2)}) "
-                else: reasoning_text += f"ไปที่แนวต้าน EMA50 ({round(sell_entry, 2)}) "
-                reasoning_text += "แล้วเปิดสถานะขาย"
+                reasoning_text = f"แนวโน้มขาลง (Daytrade) "
+                if sell_entry == bearish_ob: reasoning_text += f"รอเข้าที่ Order Block ({round(sell_entry, 2)}) "
+                elif sell_entry == ema50: reasoning_text += f"รอราคาดีดไปที่ EMA50 ({round(sell_entry, 2)}) "
+                else: reasoning_text += f"รอราคาดีดไปที่เส้นกลาง BB ({round(sell_entry, 2)}) "
             else:
                 reasoning_text = "ตลาดไม่มีเทรนด์ชัดเจน แนะนำให้รอเลือกทาง"
 
         elif strategy == "mean_reversion":
-            reasoning_text = f"กลยุทธ์ Swing Trade เน้นซื้อขายที่กรอบราคา "
-            if bullish_ob: reasoning_text += f"โดยมี Bullish OB ที่ {round(bullish_ob, 2)} เป็นจุดเข้าซื้อที่น่าสนใจ"
-            else: reasoning_text += f"โดยรอซื้อที่ขอบล่าง Bollinger Bands"
+            reasoning_text = f"กลยุทธ์ Swing Trade "
+            if buy_entry == bullish_ob: reasoning_text += f"แนะนำเข้าที่ Bullish OB ({round(buy_entry, 2)}) ซึ่งซ้อนทับกับแนวรับ "
+            else: reasoning_text += f"แนะนำรอซื้อที่ขอบล่าง Bollinger Bands ({round(buy_entry, 2)}) "
 
         return {
             "symbol": symbol,
