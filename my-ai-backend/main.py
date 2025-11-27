@@ -106,7 +106,7 @@ def analyze_dynamic(symbol: str, mode: str):
             is_calibrated = True
         
         # Indicators Calculation (Apply Offset)
-        atr = price * 0.005; rsi = 50; ema50 = price; ema200 = price
+        atr = price * 0.005; rsi = 50; ema50 = price; ema200 = price; adx = 25
         
         try: 
             df.ta.atr(length=14, append=True)
@@ -114,6 +114,9 @@ def analyze_dynamic(symbol: str, mode: str):
             
             df.ta.rsi(length=14, append=True)
             if pd.notna(df['RSI_14'].iloc[-1]): rsi = df['RSI_14'].iloc[-1]
+            
+            df.ta.adx(length=14, append=True)
+            if pd.notna(df['ADX_14'].iloc[-1]): adx = df['ADX_14'].iloc[-1]
             
             df.ta.ema(length=50, append=True)
             if pd.notna(df['EMA_50'].iloc[-1]): ema50 = df['EMA_50'].iloc[-1] + offset
@@ -125,6 +128,29 @@ def analyze_dynamic(symbol: str, mode: str):
             bb_lower = df['BBL_20_2.0'].iloc[-1] + offset if 'BBL_20_2.0' in df.columns else price - atr
             bb_upper = df['BBU_20_2.0'].iloc[-1] + offset if 'BBU_20_2.0' in df.columns else price + atr
             bb_mid = df['BBM_20_2.0'].iloc[-1] + offset if 'BBM_20_2.0' in df.columns else price
+        except: pass
+
+        # --- Order Block Detection (Simplified) ---
+        bullish_ob = None
+        bearish_ob = None
+        
+        try:
+            # Look back 50 candles for the most recent OB
+            for i in range(len(df)-2, len(df)-50, -1):
+                curr = df.iloc[i]
+                next_c = df.iloc[i+1]
+                
+                # Bullish OB: Red candle followed by strong Green move
+                if bullish_ob is None and curr['Close'] < curr['Open']: # Red
+                    if next_c['Close'] > curr['Open'] and (next_c['Close'] - next_c['Open']) > atr: # Strong Green engulfing
+                        bullish_ob = curr['Low'] + offset # Use Low of OB as zone
+                        
+                # Bearish OB: Green candle followed by strong Red move
+                if bearish_ob is None and curr['Close'] > curr['Open']: # Green
+                    if next_c['Close'] < curr['Open'] and (next_c['Open'] - next_c['Close']) > atr: # Strong Red engulfing
+                        bearish_ob = curr['High'] + offset # Use High of OB as zone
+                
+                if bullish_ob and bearish_ob: break
         except: pass
 
         # Trend Determination
@@ -142,6 +168,16 @@ def analyze_dynamic(symbol: str, mode: str):
         
         if rsi < 30: bull_score += 2; reasons.append("RSI Oversold")
         elif rsi > 70: bear_score += 2; reasons.append("RSI Overbought")
+        
+        # 3. ADX Trend Strength
+        if adx > 25: reasons.append(f"Strong Trend (ADX {int(adx)})")
+        else: reasons.append(f"Weak Trend (ADX {int(adx)})")
+
+        # 4. Order Block Confluence
+        if bullish_ob and abs(price - bullish_ob) < (atr * 2): 
+            bull_score += 1; reasons.append("Near Bullish OB")
+        if bearish_ob and abs(price - bearish_ob) < (atr * 2): 
+            bear_score += 1; reasons.append("Near Bearish OB")
 
         # Verdict
         if bull_score > bear_score:
@@ -159,22 +195,31 @@ def analyze_dynamic(symbol: str, mode: str):
         sell_entry = price
 
         if strategy == "trend_follow": # Scalping
-            if bias == "BULLISH":
+            if bias.startswith("BULLISH"):
                 buy_entry = price - (atr * 0.2)
+                if bullish_ob and bullish_ob < price: buy_entry = bullish_ob # Prefer OB entry
                 sell_entry = bb_upper
-            elif bias == "BEARISH":
+            elif bias.startswith("BEARISH"):
                 sell_entry = price + (atr * 0.2)
+                if bearish_ob and bearish_ob > price: sell_entry = bearish_ob # Prefer OB entry
                 buy_entry = bb_lower
             else:
                 buy_entry = bb_lower
                 sell_entry = bb_upper
+                
+            # ADX Filter for Scalping
+            if adx < 20: 
+                action_rec = "⚠️ ระวัง (ADX ต่ำ)"
+                bias = "SIDEWAY (Weak ADX)"
 
         elif strategy == "pullback": # Daytrade
             if bias == "BULLISH":
                 buy_entry = max(ema50, bb_mid)
+                if bullish_ob and abs(bullish_ob - price) < (atr * 3): buy_entry = bullish_ob # Smart OB Entry
                 sell_entry = bb_upper
             elif bias == "BEARISH":
                 sell_entry = min(ema50, bb_mid)
+                if bearish_ob and abs(bearish_ob - price) < (atr * 3): sell_entry = bearish_ob # Smart OB Entry
                 buy_entry = bb_lower
             else:
                 buy_entry = bb_lower
@@ -182,7 +227,9 @@ def analyze_dynamic(symbol: str, mode: str):
 
         elif strategy == "mean_reversion": # Swing
             buy_entry = bb_lower
+            if bullish_ob: buy_entry = bullish_ob
             sell_entry = bb_upper
+            if bearish_ob: sell_entry = bearish_ob
 
         # Safety
         if (price - buy_entry) > (atr * 3): buy_entry = price - atr
@@ -222,23 +269,35 @@ def analyze_dynamic(symbol: str, mode: str):
         # Reasoning Logic
         reasoning_text = ""
         if strategy == "trend_follow":
-            if bias == "BULLISH":
-                reasoning_text = f"เทรนด์เป็นขาขึ้น (ราคา > EMA50) จึงแนะนำย่อซื้อ (Buy Dip) ที่บริเวณ {round(buy_entry, 2)} ซึ่งเป็นจุดที่ปลอดภัยและใกล้เคียงกับราคาปัจจุบัน โดยวาง SL ไว้ที่ {round(buy_sl, 2)} (Max Risk) เพื่อจำกัดความเสี่ยง"
-            elif bias == "BEARISH":
-                reasoning_text = f"เทรนด์เป็นขาลง (ราคา < EMA50) จึงแนะนำเด้งขาย (Sell Rally) ที่บริเวณ {round(sell_entry, 2)} โดยวาง SL ไว้ที่ {round(sell_sl, 2)} เพื่อป้องกันการกลับตัว"
+            if bias.startswith("BULLISH"):
+                reasoning_text = f"เทรนด์ขาขึ้น (ADX {int(adx)}) "
+                if bullish_ob: reasoning_text += f"พบ Bullish Order Block ที่ {round(bullish_ob, 2)} เป็นแนวรับสำคัญ "
+                reasoning_text += f"แนะนำย่อซื้อที่ {round(buy_entry, 2)}"
+            elif bias.startswith("BEARISH"):
+                reasoning_text = f"เทรนด์ขาลง (ADX {int(adx)}) "
+                if bearish_ob: reasoning_text += f"พบ Bearish Order Block ที่ {round(bearish_ob, 2)} เป็นแนวต้านสำคัญ "
+                reasoning_text += f"แนะนำเด้งขายที่ {round(sell_entry, 2)}"
             else:
-                reasoning_text = "ตลาดเป็น Sideway แนะนำให้เล่นสั้นๆ ตามกรอบ Bollinger Bands"
+                reasoning_text = f"ตลาด Sideway (ADX {int(adx)}) รอเล่นตามกรอบหรือ Order Block"
 
         elif strategy == "pullback":
             if bias == "BULLISH":
-                reasoning_text = f"แนวโน้มหลักเป็นขาขึ้น รอราคาย่อตัวมาทดสอบแนวรับ EMA50 หรือเส้นกลาง BB ที่ {round(buy_entry, 2)} แล้วค่อยเข้าซื้อ เพื่อให้ได้ต้นทุนที่ดีที่สุด (Risk:Reward คุ้มค่า)"
+                reasoning_text = f"แนวโน้มขาขึ้น รอราคาย่อตัว "
+                if bullish_ob: reasoning_text += f"มาที่โซน Order Block ({round(bullish_ob, 2)}) "
+                else: reasoning_text += f"มาที่แนวรับ EMA50 ({round(buy_entry, 2)}) "
+                reasoning_text += "แล้วเข้าซื้อเพื่อความได้เปรียบ"
             elif bias == "BEARISH":
-                reasoning_text = f"แนวโน้มหลักเป็นขาลง รอราคาดีดตัวขึ้นมาทดสอบแนวต้านที่ {round(sell_entry, 2)} แล้วค่อยเปิดสถานะขาย"
+                reasoning_text = f"แนวโน้มขาลง รอราคาดีดตัว "
+                if bearish_ob: reasoning_text += f"ไปที่โซน Order Block ({round(bearish_ob, 2)}) "
+                else: reasoning_text += f"ไปที่แนวต้าน EMA50 ({round(sell_entry, 2)}) "
+                reasoning_text += "แล้วเปิดสถานะขาย"
             else:
-                reasoning_text = "ตลาดไม่มีเทรนด์ชัดเจน แนะนำให้รอเลือกทาง หรือเล่น Swing Trade ในกรอบ"
+                reasoning_text = "ตลาดไม่มีเทรนด์ชัดเจน แนะนำให้รอเลือกทาง"
 
         elif strategy == "mean_reversion":
-            reasoning_text = f"กลยุทธ์ Swing Trade เน้นซื้อขายที่กรอบราคา (Bollinger Bands) โดยรอซื้อที่ขอบล่าง ({round(buy_entry, 2)}) และขายที่ขอบบน ({round(sell_entry, 2)}) ซึ่งเป็นจุดที่มีโอกาสกลับตัวสูง"
+            reasoning_text = f"กลยุทธ์ Swing Trade เน้นซื้อขายที่กรอบราคา "
+            if bullish_ob: reasoning_text += f"โดยมี Bullish OB ที่ {round(bullish_ob, 2)} เป็นจุดเข้าซื้อที่น่าสนใจ"
+            else: reasoning_text += f"โดยรอซื้อที่ขอบล่าง Bollinger Bands"
 
         return {
             "symbol": symbol,
