@@ -22,7 +22,16 @@ class AnalysisRequest(BaseModel):
 
 def get_real_price(symbol):
     try:
+        # Priority 1: Yahoo Finance (Matches Chart Data)
         if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
+            try:
+                ticker = yf.Ticker("GC=F")
+                # Try fast_info first (faster, real-time-ish)
+                price = ticker.fast_info['last_price']
+                if price: return float(price)
+            except: pass
+            
+            # Fallback to Binance (Spot Price) if YF fails
             url = "https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT"
             resp = requests.get(url, timeout=5)
             data = resp.json()
@@ -35,7 +44,7 @@ def get_real_price(symbol):
             return float(data['price'])
             
     except Exception as e:
-        print(f"Binance Price Error: {e}")
+        print(f"Price Fetch Error: {e}")
         
     return None
 
@@ -89,8 +98,12 @@ def analyze_dynamic(symbol: str, mode: str):
         
         if real_price:
             price = real_price
-            offset = real_price - raw_price
-            is_calibrated = True
+            # If price is very close to raw_price (e.g. < $5 diff), assume same source -> no offset
+            if abs(real_price - raw_price) < 5:
+                offset = 0
+            else:
+                offset = real_price - raw_price
+                is_calibrated = True
         
         atr = price * 0.005; rsi = 50; ema50 = price; ema200 = price; adx = 25
         
