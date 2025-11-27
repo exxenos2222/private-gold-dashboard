@@ -71,19 +71,19 @@ def analyze_dynamic(symbol: str, mode: str):
         if mode == "scalping":
             # Scalping: M15, Trend Following
             req_int = "15m"; req_per = "5d"
-            sl_mult = 0.8; tp_mult = 1.5 
+            sl_mult = 0.5; tp_mult = 1.5 
             tf_name = "M15 (Scalping)"
             strategy = "trend_follow"
         elif mode == "daytrade":
             # Daytrade: H1, Pullback/Breakout
             req_int = "60m"; req_per = "1mo"
-            sl_mult = 1.2; tp_mult = 2.5
+            sl_mult = 0.8; tp_mult = 2.5
             tf_name = "H1 (Daytrade)"
             strategy = "pullback"
         else: 
             # Swing: D1, Mean Reversion/Trend
             req_int = "1d"; req_per = "1y"
-            sl_mult = 2.0; tp_mult = 4.0
+            sl_mult = 1.5; tp_mult = 4.0
             tf_name = "D1 (Swing)"
             strategy = "mean_reversion"
 
@@ -191,11 +191,26 @@ def analyze_dynamic(symbol: str, mode: str):
         if buy_entry >= price: buy_entry = price - (atr * 0.1)
         if sell_entry <= price: sell_entry = price + (atr * 0.1)
 
-        # TP/SL
-        buy_sl = buy_entry - (atr * sl_mult)
-        buy_tp = buy_entry + (atr * tp_mult)
-        sell_sl = sell_entry + (atr * sl_mult)
-        sell_tp = sell_entry - (atr * tp_mult)
+        # TP/SL Calculation with Safety Cap
+        if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
+            max_sl_usd = 5.0 # Default
+            if mode == "scalping": max_sl_usd = 5.0
+            elif mode == "daytrade": max_sl_usd = 10.0
+            elif mode == "swing": max_sl_usd = 25.0
+            
+            current_sl_dist = atr * sl_mult
+            if current_sl_dist > max_sl_usd:
+                sl_dist = max_sl_usd
+            else:
+                sl_dist = current_sl_dist
+        else:
+            sl_dist = atr * sl_mult
+
+        buy_sl = buy_entry - sl_dist
+        buy_tp = buy_entry + (sl_dist * (tp_mult/sl_mult))
+        
+        sell_sl = sell_entry + sl_dist
+        sell_tp = sell_entry - (sl_dist * (tp_mult/sl_mult))
 
         pips_scale = 10000 
         if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol: pips_scale = 100 
@@ -208,7 +223,7 @@ def analyze_dynamic(symbol: str, mode: str):
         reasoning_text = ""
         if strategy == "trend_follow":
             if bias == "BULLISH":
-                reasoning_text = f"เทรนด์เป็นขาขึ้น (ราคา > EMA50) จึงแนะนำย่อซื้อ (Buy Dip) ที่บริเวณ {round(buy_entry, 2)} ซึ่งเป็นจุดที่ปลอดภัยและใกล้เคียงกับราคาปัจจุบัน โดยวาง SL ไว้ที่ {round(buy_sl, 2)} (0.8 ATR) เพื่อจำกัดความเสี่ยง"
+                reasoning_text = f"เทรนด์เป็นขาขึ้น (ราคา > EMA50) จึงแนะนำย่อซื้อ (Buy Dip) ที่บริเวณ {round(buy_entry, 2)} ซึ่งเป็นจุดที่ปลอดภัยและใกล้เคียงกับราคาปัจจุบัน โดยวาง SL ไว้ที่ {round(buy_sl, 2)} (Max Risk) เพื่อจำกัดความเสี่ยง"
             elif bias == "BEARISH":
                 reasoning_text = f"เทรนด์เป็นขาลง (ราคา < EMA50) จึงแนะนำเด้งขาย (Sell Rally) ที่บริเวณ {round(sell_entry, 2)} โดยวาง SL ไว้ที่ {round(sell_sl, 2)} เพื่อป้องกันการกลับตัว"
             else:
