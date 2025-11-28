@@ -136,12 +136,16 @@ def analyze_dynamic(symbol: str, mode: str):
                 curr = df.iloc[i]
                 next_c = df.iloc[i+1]
                 
+                # Bullish OB: Red Candle -> Green Candle (Engulfing or Strong Move)
                 if bullish_ob is None and curr['Close'] < curr['Open']:
-                    if next_c['Close'] > curr['Open'] and (next_c['Close'] - next_c['Open']) > atr:
+                    # Relaxed: Body > 0.5 ATR and Close > Prev High (Strong Rejection)
+                    if next_c['Close'] > curr['High'] and (next_c['Close'] - next_c['Open']) > (atr * 0.5):
                         bullish_ob = curr['Low'] + offset
                         
+                # Bearish OB: Green Candle -> Red Candle
                 if bearish_ob is None and curr['Close'] > curr['Open']:
-                    if next_c['Close'] < curr['Open'] and (next_c['Open'] - next_c['Close']) > atr:
+                    # Relaxed: Body > 0.5 ATR and Close < Prev Low
+                    if next_c['Close'] < curr['Low'] and (next_c['Open'] - next_c['Close']) > (atr * 0.5):
                         bearish_ob = curr['High'] + offset
                 
                 if bullish_ob and bearish_ob: break
@@ -163,10 +167,15 @@ def analyze_dynamic(symbol: str, mode: str):
         if adx > 25: reasons.append(f"Strong Trend (ADX {int(adx)})")
         else: reasons.append(f"Weak Trend (ADX {int(adx)})")
 
-        if bullish_ob and abs(price - bullish_ob) < (atr * 2): 
-            bull_score += 1; reasons.append("Near Bullish OB")
-        if bearish_ob and abs(price - bearish_ob) < (atr * 2): 
-            bear_score += 1; reasons.append("Near Bearish OB")
+        if bullish_ob:
+            reasons.append(f"Bullish OB Found ({round(bullish_ob, 2)})")
+            if abs(price - bullish_ob) < (atr * 2): 
+                bull_score += 1; reasons.append("Price Near Bullish OB")
+                
+        if bearish_ob:
+            reasons.append(f"Bearish OB Found ({round(bearish_ob, 2)})")
+            if abs(price - bearish_ob) < (atr * 2): 
+                bear_score += 1; reasons.append("Price Near Bearish OB")
 
         if bull_score > bear_score:
             bias = "BULLISH"
