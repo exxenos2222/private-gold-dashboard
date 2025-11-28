@@ -62,7 +62,7 @@ export default function ChatPanel() {
             {/* Control Panel */}
             <div className="bg-zinc-800 p-3 border-b border-zinc-700 flex flex-col gap-2">
                 <div className="flex gap-2">
-                    <select 
+                    <select
                         value={selectedSymbol}
                         onChange={(e) => setSelectedSymbol(e.target.value)}
                         className="flex-1 bg-zinc-900 text-white text-xs p-2 rounded border border-zinc-600 focus:border-yellow-500 outline-none"
@@ -70,7 +70,7 @@ export default function ChatPanel() {
                         <option value="GOLD">GOLD</option>
                         <option value="BITCOIN">BITCOIN</option>
                     </select>
-                    <select 
+                    <select
                         value={selectedMode}
                         onChange={(e) => setSelectedMode(e.target.value)}
                         className="flex-1 bg-zinc-900 text-white text-xs p-2 rounded border border-zinc-600 focus:border-yellow-500 outline-none"
@@ -80,8 +80,8 @@ export default function ChatPanel() {
                         <option value="swing">💎 ยาว (D1)</option>
                     </select>
                 </div>
-                <button 
-                    onClick={requestAnalysis} 
+                <button
+                    onClick={requestAnalysis}
                     disabled={loading}
                     className="w-full bg-gradient-to-r from-yellow-600 to-yellow-500 text-zinc-900 text-xs font-bold py-2 rounded hover:from-yellow-500 hover:to-yellow-400 transition-all shadow-lg disabled:opacity-50"
                 >

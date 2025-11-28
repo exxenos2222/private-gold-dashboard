@@ -22,16 +22,8 @@ class AnalysisRequest(BaseModel):
 
 def get_real_price(symbol):
     try:
-        # Priority 1: Yahoo Finance (Matches Chart Data)
+        # Gold: Always use Binance PAXGUSDT (Spot Price) to match TradingView/OANDA Spot
         if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
-            try:
-                ticker = yf.Ticker("GC=F")
-                # Try fast_info first (faster, real-time-ish)
-                price = ticker.fast_info['last_price']
-                if price: return float(price)
-            except: pass
-            
-            # Fallback to Binance (Spot Price) if YF fails
             url = "https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT"
             resp = requests.get(url, timeout=5)
             data = resp.json()
