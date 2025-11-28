@@ -98,6 +98,7 @@ def analyze_dynamic(symbol: str, mode: str):
                 is_calibrated = True
         
         atr = price * 0.005; rsi = 50; ema50 = price; ema200 = price; adx = 25
+        stoch_k = 50; stoch_d = 50
         
         try: 
             df.ta.atr(length=14, append=True)
@@ -119,6 +120,12 @@ def analyze_dynamic(symbol: str, mode: str):
             bb_lower = df['BBL_20_2.0'].iloc[-1] + offset if 'BBL_20_2.0' in df.columns else price - atr
             bb_upper = df['BBU_20_2.0'].iloc[-1] + offset if 'BBU_20_2.0' in df.columns else price + atr
             bb_mid = df['BBM_20_2.0'].iloc[-1] + offset if 'BBM_20_2.0' in df.columns else price
+            
+            # Stochastic RSI (Momentum Filter)
+            df.ta.stochrsi(length=14, rsi_length=14, k=3, d=3, append=True)
+            if 'STOCHRSIk_14_14_3_3' in df.columns:
+                stoch_k = df['STOCHRSIk_14_14_3_3'].iloc[-1]
+                stoch_d = df['STOCHRSId_14_14_3_3'].iloc[-1]
         except: pass
 
         bullish_ob = None
@@ -174,25 +181,30 @@ def analyze_dynamic(symbol: str, mode: str):
         buy_entry = price
         sell_entry = price
 
-        if strategy == "trend_follow":
+        if strategy == "trend_follow": # Scalping M15
             if bias.startswith("BULLISH"):
+                # Priority 1: Order Block (High Confidence)
                 if bullish_ob and bullish_ob < price:
                     buy_entry = bullish_ob
-                elif price > ema50:
+                # Priority 2: EMA50/BB Mid (Only if Momentum is good)
+                elif (price > ema50) and (stoch_k < 20 or rsi < 45):
                     buy_entry = ema50
-                elif price > bb_mid:
+                elif (price > bb_mid) and (stoch_k < 20 or rsi < 45):
                     buy_entry = bb_mid
                 else:
+                    # Fallback: Wait for pullback
                     buy_entry = price - (atr * 0.5)
 
                 sell_entry = bb_upper
 
             elif bias.startswith("BEARISH"):
+                # Priority 1: Order Block
                 if bearish_ob and bearish_ob > price:
                     sell_entry = bearish_ob
-                elif price < ema50:
+                # Priority 2: EMA50/BB Mid (Only if Momentum is good)
+                elif (price < ema50) and (stoch_k > 80 or rsi > 55):
                     sell_entry = ema50
-                elif price < bb_mid:
+                elif (price < bb_mid) and (stoch_k > 80 or rsi > 55):
                     sell_entry = bb_mid
                 else:
                     sell_entry = price + (atr * 0.5)
@@ -207,7 +219,7 @@ def analyze_dynamic(symbol: str, mode: str):
                 action_rec = "⚠️ ระวัง (ADX ต่ำ)"
                 bias = "SIDEWAY (Weak ADX)"
 
-        elif strategy == "pullback":
+        elif strategy == "pullback": # Daytrade
             if bias == "BULLISH":
                 if bullish_ob and abs(bullish_ob - price) < (atr * 3):
                     buy_entry = bullish_ob
@@ -232,7 +244,7 @@ def analyze_dynamic(symbol: str, mode: str):
                 buy_entry = bb_lower
                 sell_entry = bb_upper
 
-        elif strategy == "mean_reversion":
+        elif strategy == "mean_reversion": # Swing
             buy_entry = bb_lower
             if bullish_ob and abs(bullish_ob - bb_lower) < atr:
                 buy_entry = bullish_ob
@@ -279,14 +291,14 @@ def analyze_dynamic(symbol: str, mode: str):
             if bias.startswith("BULLISH"):
                 reasoning_text = f"เทรนด์ขาขึ้น (ADX {int(adx)}) "
                 if buy_entry == bullish_ob: reasoning_text += f"แนะนำเข้าที่ Order Block ({round(buy_entry, 2)}) "
-                elif buy_entry == ema50: reasoning_text += f"แนะนำเข้าที่แนวรับ EMA50 ({round(buy_entry, 2)}) "
-                elif buy_entry == bb_mid: reasoning_text += f"แนะนำเข้าที่เส้นกลาง BB ({round(buy_entry, 2)}) "
+                elif buy_entry == ema50: reasoning_text += f"แนะนำเข้าที่แนวรับ EMA50 ({round(buy_entry, 2)}) (StochRSI {int(stoch_k)}) "
+                elif buy_entry == bb_mid: reasoning_text += f"แนะนำเข้าที่เส้นกลาง BB ({round(buy_entry, 2)}) (StochRSI {int(stoch_k)}) "
                 else: reasoning_text += f"แนะนำย่อซื้อที่ {round(buy_entry, 2)} "
             elif bias.startswith("BEARISH"):
                 reasoning_text = f"เทรนด์ขาลง (ADX {int(adx)}) "
                 if sell_entry == bearish_ob: reasoning_text += f"แนะนำเข้าที่ Order Block ({round(sell_entry, 2)}) "
-                elif sell_entry == ema50: reasoning_text += f"แนะนำเข้าที่แนวต้าน EMA50 ({round(sell_entry, 2)}) "
-                elif sell_entry == bb_mid: reasoning_text += f"แนะนำเข้าที่เส้นกลาง BB ({round(sell_entry, 2)}) "
+                elif sell_entry == ema50: reasoning_text += f"แนะนำเข้าที่แนวต้าน EMA50 ({round(sell_entry, 2)}) (StochRSI {int(stoch_k)}) "
+                elif sell_entry == bb_mid: reasoning_text += f"แนะนำเข้าที่เส้นกลาง BB ({round(sell_entry, 2)}) (StochRSI {int(stoch_k)}) "
                 else: reasoning_text += f"แนะนำเด้งขายที่ {round(sell_entry, 2)} "
             else:
                 reasoning_text = f"ตลาด Sideway (ADX {int(adx)}) รอเล่นตามกรอบหรือ Order Block"
