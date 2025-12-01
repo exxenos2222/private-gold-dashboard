@@ -97,7 +97,15 @@ export default function MarketPage() {
             if (!res.ok) throw new Error('Network response was not ok');
             const wrapper = await res.json()
             const events = JSON.parse(wrapper.contents)
-            const normalized = events.map(ev => ({ ...ev, __normDate: normalizeEventDateToYYYYMMDD(ev.date) }))
+            const normalized = events.map(ev => {
+                const dateObj = new Date(ev.date);
+                const timeStr = dateObj.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+                return {
+                    ...ev,
+                    __normDate: normalizeEventDateToYYYYMMDD(ev.date),
+                    time: timeStr
+                };
+            })
             checkNextHighImpactNews(normalized);
             let todayEvents = normalized.filter(ev => ev.__normDate === todayStr)
             if (currentFilter !== "all") todayEvents = todayEvents.filter(ev => (ev.impact || "").toLowerCase() === currentFilter.toLowerCase())
