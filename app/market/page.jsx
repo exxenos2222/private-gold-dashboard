@@ -192,9 +192,9 @@ export default function MarketPage() {
         const formattedDate = `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
 
         // Convert 12h to 24h if needed
-        let time = timeStr;
-        if (timeStr && (timeStr.toLowerCase().includes('am') || timeStr.toLowerCase().includes('pm'))) {
-            const [timePart, modifier] = timeStr.split(' ');
+        let time = timeStr || '';
+        if (time && (time.toLowerCase().includes('am') || time.toLowerCase().includes('pm'))) {
+            const [timePart, modifier] = time.split(' ');
             let [hours, minutes] = timePart.split(':');
             if (hours === '12') {
                 hours = '00';
@@ -205,7 +205,7 @@ export default function MarketPage() {
             time = `${hours}:${minutes}`;
         }
 
-        return `${formattedDate} ${time}`;
+        return `${formattedDate} ${time}`.trim();
     };
 
     return (
@@ -253,7 +253,9 @@ export default function MarketPage() {
                                             <ImpactPill impact={n.impact} />
                                             <span className="text-xs text-gray-400 font-mono">{formatDateTime(n.__normDate, n.time)}</span>
                                         </div>
-                                        <h3 className="text-sm font-semibold text-white">{n.title}</h3>
+                                        <a href={`https://www.google.com/search?q=${encodeURIComponent(n.title)}`} target="_blank" rel="noopener noreferrer" className="text-sm font-semibold text-white hover:text-yellow-500 hover:underline block">
+                                            {n.title}
+                                        </a>
                                     </div>
                                 ))}
                             </div>
