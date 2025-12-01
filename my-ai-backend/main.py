@@ -22,7 +22,6 @@ class AnalysisRequest(BaseModel):
 
 def get_real_price(symbol):
     try:
-        # Gold: Always use Binance PAXGUSDT (Spot Price) to match TradingView/OANDA Spot
         if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
             url = "https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT"
             resp = requests.get(url, timeout=5)
@@ -90,7 +89,6 @@ def analyze_dynamic(symbol: str, mode: str):
         
         if real_price:
             price = real_price
-            # If price is very close to raw_price (e.g. < $5 diff), assume same source -> no offset
             if abs(real_price - raw_price) < 5:
                 offset = 0
             else:

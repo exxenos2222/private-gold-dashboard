@@ -1,5 +1,3 @@
-// app/market/page.jsx
-
 'use client'
 import { useEffect, useState, useCallback } from 'react'
 import { FaChartLine, FaRegNewspaper, FaSyncAlt, FaTimes, FaArrowUp, FaArrowDown, FaExclamationTriangle } from 'react-icons/fa';
@@ -188,6 +186,28 @@ export default function MarketPage() {
         );
     };
 
+    const formatDateTime = (dateStr, timeStr) => {
+        if (!dateStr) return "";
+        const date = new Date(dateStr);
+        const formattedDate = `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
+
+        // Convert 12h to 24h if needed
+        let time = timeStr;
+        if (timeStr && (timeStr.toLowerCase().includes('am') || timeStr.toLowerCase().includes('pm'))) {
+            const [timePart, modifier] = timeStr.split(' ');
+            let [hours, minutes] = timePart.split(':');
+            if (hours === '12') {
+                hours = '00';
+            }
+            if (modifier.toLowerCase() === 'pm') {
+                hours = parseInt(hours, 10) + 12;
+            }
+            time = `${hours}:${minutes}`;
+        }
+
+        return `${formattedDate} ${time}`;
+    };
+
     return (
         <main className="min-h-screen w-full pb-16 text-white bg-zinc-900 font-sans overflow-x-hidden">
             <TickerBar />
@@ -229,7 +249,10 @@ export default function MarketPage() {
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                 {news.map((n, i) => (
                                     <div key={i} className={`p-3 rounded-lg border-l-4 ${n.impact === "High" ? "bg-red-900/40 border-red-500" : "bg-zinc-700 border-gray-500"} shadow`}>
-                                        <div className="flex justify-between mb-1"><ImpactPill impact={n.impact} /><span className="text-xs text-gray-400">{n.time}</span></div>
+                                        <div className="flex justify-between mb-1">
+                                            <ImpactPill impact={n.impact} />
+                                            <span className="text-xs text-gray-400 font-mono">{formatDateTime(n.__normDate, n.time)}</span>
+                                        </div>
                                         <h3 className="text-sm font-semibold text-white">{n.title}</h3>
                                     </div>
                                 ))}
@@ -249,11 +272,9 @@ export default function MarketPage() {
                                     <div className="p-3 bg-gradient-to-r from-zinc-900 to-zinc-800 border border-yellow-500/50 rounded-lg">
                                         <div className="flex justify-between items-center mb-1">
                                             <span className="text-yellow-500 font-bold text-xs">AI SCANNER</span>
-                                            {/* --- [จุดที่แก้ไข] ใส่ระบบกันพลาด (Optional Chaining) --- */}
                                             <span className={`px-2 py-0.5 text-[10px] font-bold rounded ${(aiData.trend || "").includes('UP') ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
                                                 {aiData.trend || "WAIT"}
                                             </span>
-                                            {/* ---------------------------------------------------- */}
                                         </div>
                                         <div className="flex justify-between items-end">
                                             <span className="text-lg font-bold text-white">{aiData.symbol}</span>
