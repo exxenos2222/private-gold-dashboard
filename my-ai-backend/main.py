@@ -190,10 +190,8 @@ def analyze_dynamic(symbol: str, mode: str):
 
         if strategy == "trend_follow": # Scalping M15
             if bias.startswith("BULLISH"):
-                # Priority 1: Order Block (High Confidence)
                 if bullish_ob and bullish_ob < price:
                     buy_entry = bullish_ob
-                # Priority 2: EMA50/BB Mid (Only if Momentum is good)
                 elif (price > ema50) and (stoch_k < 20 or rsi < 45):
                     buy_entry = ema50
                 elif (price > bb_mid) and (stoch_k < 20 or rsi < 45):
@@ -375,7 +373,7 @@ def analyze_custom(req: AnalysisRequest):
         )
         return {"reply": reply}
     else:
-        return {"reply": "❌ ข้อมูลไม่พร้อมใช้งาน"}
+        return {"reply": "❌ การเชื่อมต่อ Server ล้มเหลว"}
 
 @app.get("/analyze/{symbol}")
 def analyze_market(symbol: str):
