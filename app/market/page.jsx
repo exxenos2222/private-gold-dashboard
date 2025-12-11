@@ -31,8 +31,8 @@ const ImpactPill = ({ impact }) => {
 
 export default function MarketPage() {
     const [news, setNews] = useState([])
-    const [loading, setLoading] = useState(false)
-    const [error, setError] = useState('')
+    const [, setLoading] = useState(false)
+    const [, setError] = useState('')
     const [filter, setFilter] = useState('all')
     const [currentSymbol, setCurrentSymbol] = useState("OANDA:XAUUSD")
     const [mainTicker, setMainTicker] = useState({ price: 'Loading...', change: 0, percent: 0 });
@@ -150,7 +150,7 @@ export default function MarketPage() {
                 const data = await res.json();
                 setAiData(data);
                 setMainTicker({ price: data.price, change: data.change, percent: data.percent });
-            } catch (err) { console.log("AI Backend not connected"); }
+            } catch { console.log("AI Backend not connected"); }
         };
         fetchAI();
         const aiInterval = setInterval(fetchAI, 5000);

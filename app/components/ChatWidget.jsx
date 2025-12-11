@@ -2,7 +2,7 @@
 
 'use client'
 import { useState, useRef, useEffect } from 'react'
-import { FaRobot, FaPaperPlane, FaTimes, FaCog } from 'react-icons/fa';
+import { FaRobot, FaTimes, FaCog } from 'react-icons/fa';
 
 export default function ChatWidget() {
     const [isOpen, setIsOpen] = useState(false);
@@ -40,7 +40,7 @@ export default function ChatWidget() {
             });
             const data = await res.json();
             setMessages(prev => [...prev, { role: 'bot', text: data.reply }]);
-        } catch (err) {
+        } catch {
             setMessages(prev => [...prev, { role: 'bot', text: '❌ เชื่อมต่อ Server ไม่ได้ (รอ Render ตื่นสักครู่นะครับ)' }]);
         } finally {
             setLoading(false);

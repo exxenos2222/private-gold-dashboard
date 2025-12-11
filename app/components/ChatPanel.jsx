@@ -1,6 +1,6 @@
 'use client'
 import { useState, useRef, useEffect } from 'react'
-import { FaRobot, FaPaperPlane, FaTimes } from 'react-icons/fa';
+import { FaRobot, FaPaperPlane } from 'react-icons/fa';
 
 export default function ChatPanel() {
     const [selectedSymbol, setSelectedSymbol] = useState("GOLD");
@@ -41,7 +41,7 @@ export default function ChatPanel() {
             });
             const data = await res.json();
             setMessages(prev => [...prev, { role: 'bot', text: data.reply }]);
-        } catch (err) {
+        } catch {
             setMessages(prev => [...prev, { role: 'bot', text: '❌ เชื่อมต่อ Server ไม่ได้' }]);
         } finally {
             setLoading(false);
