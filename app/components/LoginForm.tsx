@@ -6,10 +6,10 @@ import { FaUser, FaLock } from "react-icons/fa";
 export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  
+
   // 1. เพิ่ม State สำหรับ Remember Me
-  const [rememberMe, setRememberMe] = useState(false); 
-  
+  const [rememberMe, setRememberMe] = useState(false);
+
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const router = useRouter();
@@ -26,7 +26,7 @@ export default function LoginPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // 2. ส่งค่า rememberMe ไปที่ API พร้อม username/password
-        body: JSON.stringify({ username, password, rememberMe }), 
+        body: JSON.stringify({ username, password, rememberMe }),
       });
 
       const data = await res.json();
@@ -38,7 +38,7 @@ export default function LoginPage() {
 
       setSuccess("Login successful!");
       router.push("/market");
-    } catch (err: any) {
+    } catch {
       setError("Network error");
     }
   };
@@ -48,7 +48,7 @@ export default function LoginPage() {
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm z-0" />
 
       <div className="relative z-10 bg-white/10 backdrop-blur-2xl p-10 rounded-3xl shadow-2xl w-full max-w-sm">
-        
+
         <h2 className="text-4xl font-bold text-white text-center mb-8">
           Sign In
         </h2>
