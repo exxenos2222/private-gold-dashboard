@@ -104,7 +104,7 @@ export default function ChatPanel() {
                     type="text"
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    placeholder="พิมพ์ถามเองได้..."
+                    placeholder="พิมพ์ถามที่ต้องการถาม AI"
                     className="flex-1 bg-zinc-800 text-white text-sm px-4 py-2 rounded-full focus:outline-none focus:ring-1 focus:ring-yellow-500"
                 />
                 <button type="submit" disabled={loading} className="bg-yellow-500 text-zinc-900 p-2 rounded-full hover:bg-yellow-400 transition-colors">
