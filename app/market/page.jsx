@@ -112,7 +112,6 @@ export default function MarketPage() {
             setNews(todayEvents.sort((a, b) => (a.time < b.time ? -1 : 1)))
         } catch (err) {
             console.error("Fetch News Error:", err);
-            // ไม่ต้อง Set Error ให้หน้าเว็บพัง แค่ Log บอก
         } finally { setLoading(false) }
     }, [checkNextHighImpactNews, todayStr, filter]);
 
@@ -142,7 +141,6 @@ export default function MarketPage() {
 
     const switchChart = (symbol) => setCurrentSymbol(symbol)
 
-    // --- useEffects ---
     useEffect(() => { const intervalId = setInterval(generateMockData, 5000); return () => clearInterval(intervalId); }, [generateMockData]);
     useEffect(() => {
         const fetchAI = async () => {
@@ -175,7 +173,6 @@ export default function MarketPage() {
     }, [countdown.minutes, fetchNews]);
     useEffect(() => { fetchNews(); }, [fetchNews]);
 
-    // --- Components ---
     const TickerBar = () => {
         const isPositive = mainTicker.change > 0;
         const colorClass = isPositive ? 'text-green-400' : mainTicker.change < 0 ? 'text-red-400' : 'text-gray-400';
@@ -199,7 +196,6 @@ export default function MarketPage() {
         const date = new Date(dateStr);
         const formattedDate = `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
 
-        // Convert 12h to 24h if needed
         let time = timeStr || '';
         if (time && (time.toLowerCase().includes('am') || time.toLowerCase().includes('pm'))) {
             const [timePart, modifier] = time.split(' ');

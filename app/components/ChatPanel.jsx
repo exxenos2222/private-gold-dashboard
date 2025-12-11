@@ -42,7 +42,7 @@ export default function ChatPanel() {
             const data = await res.json();
             setMessages(prev => [...prev, { role: 'bot', text: data.reply }]);
         } catch (err) {
-            setMessages(prev => [...prev, { role: 'bot', text: '❌ เชื่อมต่อ Server ไม่ได้ (Server อาจจะหลับอยู่)' }]);
+            setMessages(prev => [...prev, { role: 'bot', text: '❌ เชื่อมต่อ Server ไม่ได้' }]);
         } finally {
             setLoading(false);
         }
@@ -50,7 +50,6 @@ export default function ChatPanel() {
 
     return (
         <div className="flex flex-col h-full bg-zinc-800 border border-yellow-500/30 rounded-2xl shadow-xl overflow-hidden">
-            {/* Header */}
             <div className="bg-zinc-900 p-4 border-b border-yellow-500/20 flex justify-between items-center">
                 <div className="flex items-center gap-2">
                     <div className="bg-yellow-500/20 p-2 rounded-full"><FaRobot className="text-yellow-500" /></div>
@@ -59,7 +58,6 @@ export default function ChatPanel() {
                 <div className="text-xs text-green-500 flex items-center gap-1">● Online</div>
             </div>
 
-            {/* Control Panel */}
             <div className="bg-zinc-800 p-3 border-b border-zinc-700 flex flex-col gap-2">
                 <div className="flex gap-2">
                     <select
@@ -89,7 +87,6 @@ export default function ChatPanel() {
                 </button>
             </div>
 
-            {/* Chat Area */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar bg-zinc-800/50 min-h-[400px]">
                 {messages.map((msg, i) => (
                     <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -98,11 +95,10 @@ export default function ChatPanel() {
                         </div>
                     </div>
                 ))}
-                {loading && <div className="flex justify-start"><div className="bg-zinc-700 p-2 rounded-2xl rounded-tl-none text-gray-400 text-xs animate-pulse">AI กำลังพิมพ์...</div></div>}
+                {loading && <div className="flex justify-start"><div className="bg-zinc-700 p-2 rounded-2xl rounded-tl-none text-gray-400 text-xs animate-pulse">กำลังวางแผนเทรด...</div></div>}
                 <div ref={messagesEndRef} />
             </div>
 
-            {/* Input */}
             <form onSubmit={sendMessage} className="p-3 bg-zinc-900 border-t border-zinc-700 flex gap-2">
                 <input
                     type="text"
