@@ -12,7 +12,7 @@
     "groq-sdk": "^0.36.0",
     "jsonwebtoken": "^9.0.2",
     "lightweight-charts": "^5.0.9",
-    "next": "16.0.3",
+    "next": "16.0.7",
     "openai": "^6.9.1",
     "react": "19.2.0",
     "react-dom": "19.2.0",
