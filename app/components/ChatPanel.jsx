@@ -53,7 +53,7 @@ export default function ChatPanel() {
             <div className="bg-zinc-900 p-4 border-b border-yellow-500/20 flex justify-between items-center">
                 <div className="flex items-center gap-2">
                     <div className="bg-yellow-500/20 p-2 rounded-full"><FaRobot className="text-yellow-500" /></div>
-                    <span className="font-bold text-white">AI Assistant</span>
+                    <span className="font-bold text-white">AI</span>
                 </div>
                 <div className="text-xs text-green-500 flex items-center gap-1">● Online</div>
             </div>
