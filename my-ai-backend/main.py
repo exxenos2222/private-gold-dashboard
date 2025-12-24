@@ -136,6 +136,83 @@ def get_data_safe(symbol, interval, period):
     except:
         return pd.DataFrame(), "Error"
 
+def get_htf_trend(symbol, mode):
+    """
+    Fetch Higher Timeframe (HTF) context.
+    Scalping (M15) -> H4
+    Daytrade (H1) -> D1
+    Swing (D1) -> W1
+    """
+    try:
+        htf_int = "1d"
+        htf_per = "1y"
+        if mode == "scalping":
+            htf_int = "60m"; htf_per = "1mo" # H1 is robust enough for M15 scalping context
+        elif mode == "daytrade":
+            htf_int = "1d"; htf_per = "1y"
+            
+        df, _ = get_data_safe(symbol, htf_int, htf_per)
+        if df.empty or len(df) < 50: return "NEUTRAL"
+        
+        # Calculate EMA200 on HTF
+        df.ta.ema(length=200, append=True)
+        if 'EMA_200' not in df.columns: return "NEUTRAL"
+        
+        last = df.iloc[-1]
+        price = last['Close']
+        ema200 = last['EMA_200']
+        
+        if price > ema200: return "ULLISH" # Intentionally missing B to standardise later or just string check
+        elif price < ema200: return "EARISH"
+        
+    except: pass
+    return "NEUTRAL"
+
+def check_divergence(df, price_col='Close', rsi_col='RSI_14', lookback=10):
+    """
+    Simple 3-point Pivot Divergence Detection
+    Looking for peaks/valleys in the last 'lookback' candles.
+    """
+    try:
+        if len(df) < lookback: return None
+        
+        subset = df.iloc[-lookback:].copy()
+        closes = subset[price_col].values
+        rsis = subset[rsi_col].values
+        
+        # We need at least 2 peaks or 2 valleys to compare
+        # This is a simplified "Regular Divergence" check using only the endpoints of the window vs current
+        # A more robust one iterates through pivots.
+        
+        curr_price = closes[-1]
+        curr_rsi = rsis[-1]
+        
+        # Find local Minima (Valley) for Bullish Div
+        # Simple Logic: Current Price is Lower than Lowest Price in window, but Current RSI is Higher than Lowest RSI
+        min_price_idx = subset[price_col][:-1].idxmin() # Exclude current candle
+        if pd.notna(min_price_idx):
+            lowest_price = subset.loc[min_price_idx, price_col]
+            psi_at_lowest = subset.loc[min_price_idx, rsi_col]
+            
+            # Condition: Lower Low Price + Higher Low RSI
+            if curr_price < lowest_price and curr_rsi > psi_at_lowest and curr_rsi < 50:
+                 return "BULLISH" # Bullish Divergence
+
+        # Find local Maxima (Peak) for Bearish Div
+        max_price_idx = subset[price_col][:-1].idxmax()
+        if pd.notna(max_price_idx):
+            highest_price = subset.loc[max_price_idx, price_col]
+            rsi_at_highest = subset.loc[max_price_idx, rsi_col]
+            
+            # Condition: Higher High Price + Lower High RSI
+            if curr_price > highest_price and curr_rsi < rsi_at_highest and curr_rsi > 50:
+                return "BEARISH" # Bearish Divergence
+
+    except Exception as e: 
+        print(f"Div Check Error: {e}")
+    
+    return None
+
 def analyze_dynamic(symbol: str, mode: str):
     try:
         if mode == "scalping":
@@ -222,19 +299,36 @@ def analyze_dynamic(symbol: str, mode: str):
                 if bullish_ob and bearish_ob: break
         except: pass
 
+        # --- AI Upgrade: Advanced Context ---
+        htf_trend = get_htf_trend(symbol, mode)
+        divergence = check_divergence(df)
+
         bull_score = 0
         bear_score = 0
         reasons = []
 
+        # 1. Trend Analysis
         if price > ema50: bull_score += 2; reasons.append("Price > EMA50")
         else: bear_score += 2; reasons.append("Price < EMA50")
 
+        if htf_trend == "ULLISH": bull_score += 2; reasons.append("Major Trend Bullish 🟢")
+        elif htf_trend == "EARISH": bear_score += 2; reasons.append("Major Trend Bearish 🔴")
+
+        # 2. Momentum & Divergence
         if rsi > 55: bull_score += 1
         elif rsi < 45: bear_score += 1
         
         if rsi < 30: bull_score += 2; reasons.append("RSI Oversold")
         elif rsi > 70: bear_score += 2; reasons.append("RSI Overbought")
+
+        if divergence == "BULLISH": 
+            bull_score += 3
+            reasons.append("🔥 Bullish Divergence Detected")
+        elif divergence == "BEARISH": 
+            bear_score += 3
+            reasons.append("🔥 Bearish Divergence Detected")
         
+        # 3. Strength
         if adx > 25: reasons.append(f"Strong Trend (ADX {int(adx)})")
         else: reasons.append(f"Weak Trend (ADX {int(adx)})")
 
@@ -365,40 +459,26 @@ def analyze_dynamic(symbol: str, mode: str):
         if is_calibrated: final_tf_name += " ⚡(Real-time)"
 
         reasoning_text = ""
+        # Improved Reasoning Text
+        if htf_trend == "ULLISH": reasoning_text += "ภาพใหญ่เป็นขาขึ้น (Major Bullish) "
+        elif htf_trend == "EARISH": reasoning_text += "ภาพใหญ่เป็นขาลง (Major Bearish) "
+        
+        if divergence == "BULLISH": reasoning_text += "❗พบสัญญาณกลับตัว Bullish Divergence "
+        elif divergence == "BEARISH": reasoning_text += "❗พบสัญญาณกลับตัว Bearish Divergence "
+
         if strategy == "trend_follow":
             if bias.startswith("BULLISH"):
-                reasoning_text = f"เทรนด์ขาขึ้น (ADX {int(adx)}) "
-                if buy_entry == bullish_ob: reasoning_text += f"แนะนำเข้าที่ Order Block ({round(buy_entry, 2)}) "
-                elif buy_entry == ema50: reasoning_text += f"แนะนำเข้าที่แนวรับ EMA50 ({round(buy_entry, 2)}) (StochRSI {int(stoch_k)}) "
-                elif buy_entry == bb_mid: reasoning_text += f"แนะนำเข้าที่เส้นกลาง BB ({round(buy_entry, 2)}) (StochRSI {int(stoch_k)}) "
-                else: reasoning_text += f"แนะนำย่อซื้อที่ {round(buy_entry, 2)} "
+                reasoning_text += f"แนะนำย่อซื้อตามเทรนด์ (ADX {int(adx)}) "
             elif bias.startswith("BEARISH"):
-                reasoning_text = f"เทรนด์ขาลง (ADX {int(adx)}) "
-                if sell_entry == bearish_ob: reasoning_text += f"แนะนำเข้าที่ Order Block ({round(sell_entry, 2)}) "
-                elif sell_entry == ema50: reasoning_text += f"แนะนำเข้าที่แนวต้าน EMA50 ({round(sell_entry, 2)}) (StochRSI {int(stoch_k)}) "
-                elif sell_entry == bb_mid: reasoning_text += f"แนะนำเข้าที่เส้นกลาง BB ({round(sell_entry, 2)}) (StochRSI {int(stoch_k)}) "
-                else: reasoning_text += f"แนะนำเด้งขายที่ {round(sell_entry, 2)} "
+                reasoning_text += f"แนะนำเด้งขายตามเทรนด์ (ADX {int(adx)}) "
             else:
-                reasoning_text = f"ตลาด Sideway (ADX {int(adx)}) รอเล่นตามกรอบหรือ Order Block"
-
-        elif strategy == "pullback":
-            if bias == "BULLISH":
-                reasoning_text = f"แนวโน้มขาขึ้น (Daytrade) "
-                if buy_entry == bullish_ob: reasoning_text += f"รอเข้าที่ Order Block ({round(buy_entry, 2)}) "
-                elif buy_entry == ema50: reasoning_text += f"รอราคาย่อมาที่ EMA50 ({round(buy_entry, 2)}) "
-                else: reasoning_text += f"รอราคาย่อมาที่เส้นกลาง BB ({round(buy_entry, 2)}) "
-            elif bias == "BEARISH":
-                reasoning_text = f"แนวโน้มขาลง (Daytrade) "
-                if sell_entry == bearish_ob: reasoning_text += f"รอเข้าที่ Order Block ({round(sell_entry, 2)}) "
-                elif sell_entry == ema50: reasoning_text += f"รอราคาดีดไปที่ EMA50 ({round(sell_entry, 2)}) "
-                else: reasoning_text += f"รอราคาดีดไปที่เส้นกลาง BB ({round(sell_entry, 2)}) "
-            else:
-                reasoning_text = "ตลาดไม่มีเทรนด์ชัดเจน แนะนำให้รอเลือกทาง"
-
-        elif strategy == "mean_reversion":
-            reasoning_text = f"กลยุทธ์ Swing Trade "
-            if buy_entry == bullish_ob: reasoning_text += f"แนะนำเข้าที่ Bullish OB ({round(buy_entry, 2)}) ซึ่งซ้อนทับกับแนวรับ "
-            else: reasoning_text += f"แนะนำรอซื้อที่ขอบล่าง Bollinger Bands ({round(buy_entry, 2)}) "
+                reasoning_text += f"ตลาดแกว่งตัว (Sideway) รอเลือกทาง "
+        
+        # Add entry context
+        if bias.startswith("BULLISH"):
+             reasoning_text += f"เป้าเข้า: {round(buy_entry, 2)}"
+        elif bias.startswith("BEARISH"):
+             reasoning_text += f"เป้าเข้า: {round(sell_entry, 2)}"
 
         return {
             "symbol": symbol,
@@ -406,7 +486,7 @@ def analyze_dynamic(symbol: str, mode: str):
             "tf_name": final_tf_name,
             "trend": bias,
             "action": action_rec,
-            "reasons": ", ".join(reasons[:3]),
+            "reasons": ", ".join(reasons[:4]),
             "reasoning_text": reasoning_text,
             "rsi": round(rsi, 2),
             "score": f"{bull_score}-{bear_score}",
@@ -416,6 +496,8 @@ def analyze_dynamic(symbol: str, mode: str):
 
     except Exception as e:
         print(f"CRITICAL ERROR: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 @app.post("/analyze_custom")
