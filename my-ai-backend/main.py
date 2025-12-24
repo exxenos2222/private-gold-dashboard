@@ -1,10 +1,12 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 import requests
+import asyncio
+import json
 
 app = FastAPI()
 
@@ -20,17 +22,38 @@ class AnalysisRequest(BaseModel):
     symbol: str
     mode: str 
 
+# --- WebSocket Manager ---
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: str):
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(message)
+            except:
+                self.disconnect(connection)
+
+manager = ConnectionManager()
+
 def get_real_price(symbol):
     try:
         if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
             url = "https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT"
-            resp = requests.get(url, timeout=5)
+            resp = requests.get(url, timeout=2) # Reduced timeout for speed
             data = resp.json()
             return float(data['price'])
             
         elif "BTC" in symbol:
             url = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
-            resp = requests.get(url, timeout=5)
+            resp = requests.get(url, timeout=2)
             data = resp.json()
             return float(data['price'])
             
@@ -38,6 +61,61 @@ def get_real_price(symbol):
         print(f"Price Fetch Error: {e}")
         
     return None
+
+# --- Background Task for Realtime Price ---
+async def broadcast_price_loop():
+    print("Starting Broadcast Loop...")
+    previous_close = None
+    
+    # Try to fetch previous close initially
+    try:
+        ticker = yf.Ticker("GC=F")
+        hist = ticker.history(period="5d")
+        if not hist.empty:
+            previous_close = hist['Close'].iloc[-2] # Previous trading day
+            print(f"Previous Close fetched: {previous_close}")
+    except Exception as e:
+        print(f"Init Error: {e}")
+
+    while True:
+        try:
+            # Fetch Gold Price
+            price = get_real_price("GC=F")
+            
+            if price:
+                # Calculate change if we have previous close
+                change = 0.0
+                percent = 0.0
+                if previous_close:
+                    change = price - previous_close
+                    percent = (change / previous_close) * 100
+
+                data = {
+                    "symbol": "GC=F",
+                    "price": round(price, 2),
+                    "change": round(change, 2),
+                    "percent": round(percent, 2),
+                    "timestamp": pd.Timestamp.now().isoformat()
+                }
+                await manager.broadcast(json.dumps(data))
+        except Exception as e:
+            print(f"Broadcast Error: {e}")
+        
+        await asyncio.sleep(1) # Update every 1 second
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(broadcast_price_loop())
+
+@app.websocket("/ws/price/GC=F")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text() # Keep connection alive
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
 
 def get_data_safe(symbol, interval, period):
     if "GC=F" in symbol or "XAU" in symbol or "GOLD" in symbol:
@@ -119,7 +197,6 @@ def analyze_dynamic(symbol: str, mode: str):
             bb_upper = df['BBU_20_2.0'].iloc[-1] + offset if 'BBU_20_2.0' in df.columns else price + atr
             bb_mid = df['BBM_20_2.0'].iloc[-1] + offset if 'BBM_20_2.0' in df.columns else price
             
-            # Stochastic RSI (Momentum Filter)
             df.ta.stochrsi(length=14, rsi_length=14, k=3, d=3, append=True)
             if 'STOCHRSIk_14_14_3_3' in df.columns:
                 stoch_k = df['STOCHRSIk_14_14_3_3'].iloc[-1]
@@ -134,15 +211,11 @@ def analyze_dynamic(symbol: str, mode: str):
                 curr = df.iloc[i]
                 next_c = df.iloc[i+1]
                 
-                # Bullish OB: Red Candle -> Green Candle (Engulfing or Strong Move)
                 if bullish_ob is None and curr['Close'] < curr['Open']:
-                    # Relaxed: Body > 0.5 ATR and Close > Prev High (Strong Rejection)
                     if next_c['Close'] > curr['High'] and (next_c['Close'] - next_c['Open']) > (atr * 0.5):
                         bullish_ob = curr['Low'] + offset
                         
-                # Bearish OB: Green Candle -> Red Candle
                 if bearish_ob is None and curr['Close'] > curr['Open']:
-                    # Relaxed: Body > 0.5 ATR and Close < Prev Low
                     if next_c['Close'] < curr['Low'] and (next_c['Open'] - next_c['Close']) > (atr * 0.5):
                         bearish_ob = curr['High'] + offset
                 

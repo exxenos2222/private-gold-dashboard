@@ -142,19 +142,71 @@ export default function MarketPage() {
     const switchChart = (symbol) => setCurrentSymbol(symbol)
 
     useEffect(() => { const intervalId = setInterval(generateMockData, 5000); return () => clearInterval(intervalId); }, [generateMockData]);
+    useEffect(() => { const intervalId = setInterval(generateMockData, 5000); return () => clearInterval(intervalId); }, [generateMockData]);
+
+    // Real-time WebSocket Connection
     useEffect(() => {
-        const fetchAI = async () => {
+        let ws;
+        let reconnectTimer;
+
+        const connectWebSocket = () => {
+            // Use WSS for production, WS for localhost if needed. 
+            // Currently hardcoded to the Render URL as requested/implied by existing code
+            ws = new WebSocket('wss://private-gold-dashboard.onrender.com/ws/price/GC=F');
+
+            ws.onopen = () => {
+                console.log("Connected to Real-time Gold Price");
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.symbol === "GC=F") {
+                        setMainTicker(prev => ({
+                            ...prev,
+                            price: data.price,
+                            change: data.change,
+                            percent: data.percent
+                        }));
+                    }
+                } catch (e) {
+                    console.error("WS Parse Error", e);
+                }
+            };
+
+            ws.onclose = () => {
+                console.log("Disconnected from Real-time Gold Price. Reconnecting...");
+                reconnectTimer = setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = (err) => {
+                console.error("WebSocket Error:", err);
+                ws.close();
+            };
+        };
+
+        connectWebSocket();
+
+        // Initial Fetch for immediate data (fallback)
+        const fetchInitial = async () => {
             try {
                 const res = await fetch('https://private-gold-dashboard.onrender.com/analyze/GC=F');
                 if (!res.ok) throw new Error('Connect failed');
                 const data = await res.json();
-                setAiData(data);
+                setAiData(data); // Also sets initial AI data
                 setMainTicker({ price: data.price, change: data.change, percent: data.percent });
             } catch { console.log("AI Backend not connected"); }
         };
-        fetchAI();
-        const aiInterval = setInterval(fetchAI, 5000);
-        return () => clearInterval(aiInterval);
+        fetchInitial();
+
+        // Keep AI fetch interval longer for signals, but price comes from WS
+        const aiInterval = setInterval(fetchInitial, 10000);
+
+        return () => {
+            if (ws) ws.close();
+            clearTimeout(reconnectTimer);
+            clearInterval(aiInterval);
+        };
     }, []);
     useEffect(() => {
         const script = document.createElement('script')
